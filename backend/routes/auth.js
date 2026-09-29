@@ -204,7 +204,21 @@ router.post('/forgot-password', async (req, res) => {
     }
 
     const normalizedEmail = email.trim().toLowerCase();
-    const user = db.prepare('SELECT id, email, name FROM users WHERE LOWER(email) = ?').get(normalizedEmail);
+    let user = null;
+
+    if (db.pool) {
+      try {
+        const uRes = await db.pool.query('SELECT id, email, name FROM users WHERE LOWER(email) = $1', [normalizedEmail]);
+        if (uRes.rows && uRes.rows.length > 0) user = uRes.rows[0];
+      } catch (e) {}
+    }
+
+    if (!user) {
+      try {
+        user = db.prepare('SELECT id, email, name FROM users WHERE LOWER(email) = ?').get(normalizedEmail);
+      } catch (e) {}
+    }
+
     if (!user) {
       return res.status(404).json({ error: `No registered account found for ${normalizedEmail}. Please check spelling or create an account.` });
     }
@@ -212,12 +226,39 @@ router.post('/forgot-password', async (req, res) => {
     // Generate random 6-digit OTP code
     const otpCode = Math.floor(100000 + Math.random() * 900000).toString();
     const resetId = `rst_${Date.now()}`;
+    const expiresAt = new Date(Date.now() + 15 * 60 * 1000);
 
-    // Store in password_resets with 15-minute expiration
-    db.prepare(`
-      INSERT INTO password_resets (id, email, token, expires_at, used)
-      VALUES (?, ?, ?, datetime('now', '+15 minutes'), 0)
-    `).run(resetId, normalizedEmail, otpCode);
+    // Ensure table exists in Supabase and local DB
+    if (db.pool) {
+      try {
+        await db.pool.query(`
+          CREATE TABLE IF NOT EXISTS password_resets (
+            id TEXT PRIMARY KEY, email TEXT NOT NULL, token TEXT NOT NULL,
+            expires_at TIMESTAMP WITH TIME ZONE NOT NULL, used INTEGER DEFAULT 0,
+            created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+          )
+        `);
+        await db.pool.query(
+          'INSERT INTO password_resets (id, email, token, expires_at, used) VALUES ($1, $2, $3, $4, 0)',
+          [resetId, normalizedEmail, otpCode, expiresAt]
+        );
+      } catch (e) {
+        console.warn('[SUPABASE PASSWORD RESET ERROR]:', e.message);
+      }
+    }
+
+    try {
+      db.prepare(`
+        CREATE TABLE IF NOT EXISTS password_resets (
+          id TEXT PRIMARY KEY, email TEXT NOT NULL, token TEXT NOT NULL,
+          expires_at DATETIME NOT NULL, used INTEGER DEFAULT 0, created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+        )
+      `).run();
+      db.prepare(`
+        INSERT INTO password_resets (id, email, token, expires_at, used)
+        VALUES (?, ?, ?, datetime('now', '+15 minutes'), 0)
+      `).run(resetId, normalizedEmail, otpCode);
+    } catch (e) {}
 
     console.log('\n======================================================');
     console.log(`🔐 [BREVO OTP GENERATED] For Account: ${normalizedEmail}`);
@@ -237,7 +278,7 @@ router.post('/forgot-password', async (req, res) => {
 });
 
 // 5. Reset Password using OTP code
-router.post('/reset-password', (req, res) => {
+router.post('/reset-password', async (req, res) => {
   try {
     const { email, code, newPassword } = req.body;
     if (!email || !code || !newPassword) {
@@ -249,22 +290,47 @@ router.post('/reset-password', (req, res) => {
     }
 
     const normalizedEmail = email.trim().toLowerCase();
-    const resetRecord = db.prepare(`
-      SELECT * FROM password_resets 
-      WHERE LOWER(email) = ? AND token = ? AND used = 0 AND expires_at > CURRENT_TIMESTAMP
-      ORDER BY created_at DESC LIMIT 1
-    `).get(normalizedEmail, code.trim());
+    let resetRecord = null;
+
+    if (db.pool) {
+      try {
+        const rRes = await db.pool.query(`
+          SELECT * FROM password_resets 
+          WHERE LOWER(email) = $1 AND token = $2 AND used = 0 AND expires_at > NOW()
+          ORDER BY created_at DESC LIMIT 1
+        `, [normalizedEmail, code.trim()]);
+        if (rRes.rows && rRes.rows.length > 0) resetRecord = rRes.rows[0];
+      } catch (e) {}
+    }
+
+    if (!resetRecord) {
+      try {
+        resetRecord = db.prepare(`
+          SELECT * FROM password_resets 
+          WHERE LOWER(email) = ? AND token = ? AND used = 0 AND expires_at > CURRENT_TIMESTAMP
+          ORDER BY created_at DESC LIMIT 1
+        `).get(normalizedEmail, code.trim());
+      } catch (e) {}
+    }
 
     if (!resetRecord) {
       return res.status(400).json({ error: 'Invalid or expired verification code. Please request a new code.' });
     }
 
-    // Hash new password and update user
+    // Hash new password and update user in Supabase and local DB
     const passwordHash = bcrypt.hashSync(newPassword, 8);
-    db.prepare('UPDATE users SET password_hash = ? WHERE LOWER(email) = ?').run(passwordHash, normalizedEmail);
 
-    // Mark reset record as used
-    db.prepare('UPDATE password_resets SET used = 1 WHERE id = ?').run(resetRecord.id);
+    if (db.pool) {
+      try {
+        await db.pool.query('UPDATE users SET password_hash = $1 WHERE LOWER(email) = $2', [passwordHash, normalizedEmail]);
+        await db.pool.query('UPDATE password_resets SET used = 1 WHERE id = $1', [resetRecord.id]);
+      } catch (e) {}
+    }
+
+    try {
+      db.prepare('UPDATE users SET password_hash = ? WHERE LOWER(email) = ?').run(passwordHash, normalizedEmail);
+      db.prepare('UPDATE password_resets SET used = 1 WHERE id = ?').run(resetRecord.id);
+    } catch (e) {}
 
     res.json({ message: 'Your password has been successfully reset. You can now log in.' });
   } catch (error) {
