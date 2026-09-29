@@ -165,11 +165,27 @@ export default function ItemsExplorer({ onInspectItemMatches }) {
 
                   {/* Thumbnail */}
                   <div className="relative aspect-video rounded-xl overflow-hidden bg-zinc-100 dark:bg-[#0b0b0e] border border-zinc-200 dark:border-[#26262e] mb-3">
-                    <img 
-                      src={item.image} 
-                      alt={item.title} 
-                      className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500" 
-                    />
+                    {item.image ? (
+                      <img 
+                        src={item.image} 
+                        alt={item.title} 
+                        className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500"
+                        onError={(e) => {
+                          e.target.style.display = 'none';
+                          e.target.nextSibling.style.display = 'flex';
+                        }}
+                      />
+                    ) : null}
+                    {/* Fallback placeholder shown when image is missing or broken */}
+                    <div
+                      style={{ display: item.image ? 'none' : 'flex' }}
+                      className="w-full h-full flex-col items-center justify-center gap-2 bg-gradient-to-br from-zinc-100 to-zinc-200 dark:from-[#0f0f14] dark:to-[#1a1a22]"
+                    >
+                      <svg xmlns="http://www.w3.org/2000/svg" className="w-8 h-8 text-zinc-300 dark:text-zinc-600" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" />
+                      </svg>
+                      <span className="text-[10px] text-zinc-400 dark:text-zinc-600 font-mono">NO PHOTO</span>
+                    </div>
                     <div className="absolute top-2 right-2 px-2 py-0.5 rounded-md bg-black/60 text-[9px] font-mono text-white border border-white/10">
                       {item.category}
                     </div>

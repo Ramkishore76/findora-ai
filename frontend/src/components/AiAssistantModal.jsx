@@ -141,7 +141,22 @@ export default function AiAssistantModal({ isOpen, onClose, onSelectCandidate })
                     className="p-3 rounded-xl bg-zinc-50 dark:bg-[#141418] border border-zinc-200/80 dark:border-[#26262e] hover:border-zinc-300 dark:hover:border-zinc-600 cursor-pointer flex items-center justify-between text-xs transition-colors"
                   >
                     <div className="flex items-center gap-3">
-                      <img src={item.image} alt={item.title} className="w-12 h-10 rounded-lg object-cover bg-zinc-200 dark:bg-zinc-800" />
+                      {item.image ? (
+                        <img
+                          src={item.image}
+                          alt={item.title}
+                          className="w-12 h-10 rounded-lg object-cover bg-zinc-200 dark:bg-zinc-800 flex-shrink-0"
+                          onError={(e) => { e.target.style.display='none'; e.target.nextSibling.style.display='flex'; }}
+                        />
+                      ) : null}
+                      <div
+                        style={{ display: item.image ? 'none' : 'flex' }}
+                        className="w-12 h-10 rounded-lg bg-zinc-200 dark:bg-zinc-800 items-center justify-center flex-shrink-0"
+                      >
+                        <svg xmlns="http://www.w3.org/2000/svg" className="w-5 h-5 text-zinc-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" />
+                        </svg>
+                      </div>
                       <div>
                         <div className="font-semibold text-zinc-900 dark:text-white">{item.title}</div>
                         <div className="text-[11px] text-zinc-500 dark:text-zinc-400 flex items-center gap-1.5 mt-0.5">

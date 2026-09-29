@@ -164,8 +164,17 @@ export default function Navbar({ activeTab, setActiveTab, onOpenAssistant }) {
                 onClick={() => setShowPersonaMenu(!showPersonaMenu)}
                 className="flex items-center gap-2 pl-2 pr-3 py-1 rounded-xl bg-zinc-100 dark:bg-[#141418] border border-zinc-200 dark:border-[#26262e] hover:border-zinc-300 dark:hover:border-zinc-600 transition-all active:scale-95 shadow-xs"
               >
-                <div className="w-6 h-6 rounded-full overflow-hidden bg-zinc-200 dark:bg-zinc-700 border border-zinc-300 dark:border-zinc-600">
-                  <img src={currentUser?.avatar || 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=100'} alt={currentUser?.name || 'User'} className="w-full h-full object-cover" />
+                <div className="w-6 h-6 rounded-full overflow-hidden bg-zinc-200 dark:bg-zinc-700 border border-zinc-300 dark:border-zinc-600 flex items-center justify-center">
+                  {currentUser?.avatar ? (
+                    <img
+                      src={currentUser.avatar}
+                      alt={currentUser?.name || 'User'}
+                      className="w-full h-full object-cover"
+                      onError={(e) => { e.target.style.display='none'; e.target.parentNode.classList.add('flex','items-center','justify-center'); e.target.parentNode.innerHTML = `<span class="text-[9px] font-bold text-zinc-500 dark:text-zinc-400">${(currentUser?.name||'U')[0].toUpperCase()}</span>`; }}
+                    />
+                  ) : (
+                    <span className="text-[9px] font-bold text-zinc-500 dark:text-zinc-400">{(currentUser?.name || 'U')[0].toUpperCase()}</span>
+                  )}
                 </div>
                 <div className="text-left hidden sm:block">
                   <div className="text-xs font-semibold text-zinc-900 dark:text-white leading-tight flex items-center gap-1">
@@ -197,7 +206,18 @@ export default function Navbar({ activeTab, setActiveTab, onOpenAssistant }) {
                         }`}
                       >
                         <div className="flex items-center gap-2">
-                          <img src={p.avatar} alt={p.name} className="w-6 h-6 rounded-full object-cover" />
+                          <div className="w-6 h-6 rounded-full overflow-hidden bg-zinc-200 dark:bg-zinc-700 flex items-center justify-center flex-shrink-0">
+                            {p.avatar ? (
+                              <img
+                                src={p.avatar}
+                                alt={p.name}
+                                className="w-full h-full object-cover"
+                                onError={(e) => { e.target.style.display='none'; e.target.parentNode.innerHTML = `<span class="text-[9px] font-bold text-zinc-500">${(p.name||'U')[0].toUpperCase()}</span>`; }}
+                              />
+                            ) : (
+                              <span className="text-[9px] font-bold text-zinc-500">{(p.name||'U')[0].toUpperCase()}</span>
+                            )}
+                          </div>
                           <div>
                             <div className="font-semibold text-zinc-900 dark:text-white">{p.name}</div>
                             <div className="text-[10px] text-zinc-400">{p.email} • {p.role}</div>

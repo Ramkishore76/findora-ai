@@ -207,11 +207,21 @@ export default function MatchHeroView({ onStartClaim, onSelectOtherMatch, active
 
             {/* Image Preview */}
             <div className="relative aspect-video rounded-xl overflow-hidden bg-zinc-100 dark:bg-[#0b0b0e] border border-zinc-200 dark:border-[#26262e] mb-4 group">
-              <img 
-                src={lost_item.image} 
-                alt={lost_item.title} 
-                className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500" 
-              />
+              {lost_item.image ? (
+                <img 
+                  src={lost_item.image} 
+                  alt={lost_item.title} 
+                  className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500"
+                  onError={(e) => { e.target.style.display='none'; e.target.nextSibling.style.display='flex'; }}
+                />
+              ) : null}
+              <div style={{ display: lost_item.image ? 'none' : 'flex' }}
+                className="w-full h-full flex-col items-center justify-center gap-2 bg-gradient-to-br from-zinc-100 to-zinc-200 dark:from-[#0f0f14] dark:to-[#1a1a22]">
+                <svg xmlns="http://www.w3.org/2000/svg" className="w-10 h-10 text-zinc-300 dark:text-zinc-600" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" />
+                </svg>
+                <span className="text-[11px] text-zinc-400 dark:text-zinc-600 font-mono">NO PHOTO SUBMITTED</span>
+              </div>
               <div className="absolute bottom-2 left-2 px-2 py-0.5 rounded-md bg-black/70 backdrop-blur-md text-[10px] font-mono text-sky-400 border border-white/10">
                 Visual Hash: {lost_item?.id ? `VEC_${lost_item.id.replace(/[^a-zA-Z0-9]/g, '').slice(-8).toUpperCase()}` : 'VEC_SYNC'}
               </div>
@@ -294,15 +304,26 @@ export default function MatchHeroView({ onStartClaim, onSelectOtherMatch, active
 
             {/* Image Preview */}
             <div className="relative aspect-video rounded-xl overflow-hidden bg-zinc-100 dark:bg-[#0b0b0e] border border-zinc-200 dark:border-[#26262e] mb-4 group">
-              <img 
-                src={found_item.image} 
-                alt={found_item.title} 
-                className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500" 
-              />
+              {found_item.image ? (
+                <img 
+                  src={found_item.image} 
+                  alt={found_item.title} 
+                  className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500"
+                  onError={(e) => { e.target.style.display='none'; e.target.nextSibling.style.display='flex'; }}
+                />
+              ) : null}
+              <div style={{ display: found_item.image ? 'none' : 'flex' }}
+                className="w-full h-full flex-col items-center justify-center gap-2 bg-gradient-to-br from-zinc-100 to-zinc-200 dark:from-[#0f0f14] dark:to-[#1a1a22]">
+                <svg xmlns="http://www.w3.org/2000/svg" className="w-10 h-10 text-zinc-300 dark:text-zinc-600" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" />
+                </svg>
+                <span className="text-[11px] text-zinc-400 dark:text-zinc-600 font-mono">NO PHOTO SUBMITTED</span>
+              </div>
               <div className="absolute bottom-2 right-2 px-2 py-0.5 rounded-md bg-black/70 backdrop-blur-md text-[10px] font-mono text-emerald-400 border border-white/10">
                 Condition: {found_item.condition || 'Operational'}
               </div>
             </div>
+
 
             <h3 className="text-lg font-bold text-zinc-900 dark:text-white leading-snug">{found_item.title}</h3>
             <p className="text-xs text-zinc-600 dark:text-zinc-300 mt-1 leading-relaxed">{found_item.description}</p>
