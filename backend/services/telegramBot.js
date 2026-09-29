@@ -50,8 +50,11 @@ class TelegramBotService {
         this.botInfo = data.result;
         this.botUsername = data.result.username || this.botUsername;
         console.log(`[TELEGRAM BOT] ✅ Connected successfully to Telegram as @${data.result.username} (${data.result.first_name})`);
-        console.log(`[TELEGRAM BOT] 👥 Ready for Campus Community Group: ${this.campusGroupLink}`);
-        this.startPolling();
+        if (!process.env.VERCEL) {
+          this.startPolling();
+        } else {
+          console.log(`[TELEGRAM BOT] ℹ️ Running in Serverless mode on Vercel (Polling disabled; broadcast & webhooks ready)`);
+        }
       } else {
         this.connected = false;
         this.lastError = data.description;

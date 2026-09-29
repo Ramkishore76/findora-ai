@@ -22,7 +22,8 @@ export default function BlindVerificationModal({ matchData, isOpen, onClose, onV
   const [claimId, setClaimId] = useState(null);
   const [questions, setQuestions] = useState([]);
   const [answers, setAnswers] = useState({});
-  const [result, setResult] = useState(null);
+  const [result, setResult] = useState(
+    null);
   const [error, setError] = useState('');
 
   useEffect(() => {

@@ -32,7 +32,7 @@ const uploadsDir = path.resolve(__dirname, '..', 'uploads');
 app.use('/uploads', express.static(uploadsDir));
 
 // Health check endpoint
-app.get('/api/health', (req, res) => {
+app.get(['/api/health', '/health'], (req, res) => {
   res.json({
     status: 'online',
     system: 'FINDORA AI - Autonomous Lost & Found Intelligence Network',
@@ -41,17 +41,22 @@ app.get('/api/health', (req, res) => {
   });
 });
 
-// API Routes
-app.use('/api/auth', authRoutes);
-app.use('/api/items', itemsRoutes);
-app.use('/api/matches', matchesRoutes);
-app.use('/api/claims', claimsRoutes);
-app.use('/api/admin', adminRoutes);
-app.use('/api/recovery', recoveryRoutes);
-app.use('/api/analytics', analyticsRoutes);
-app.use('/api/assistant', assistantRoutes);
-app.use('/api/notifications', notificationsRoutes);
-app.use('/api/telegram', telegramRoutes);
+// API Routes (support both /api/* and direct /* prefixes)
+const mount = (routePath, handler) => {
+  app.use(`/api${routePath}`, handler);
+  app.use(routePath, handler);
+};
+
+mount('/auth', authRoutes);
+mount('/items', itemsRoutes);
+mount('/matches', matchesRoutes);
+mount('/claims', claimsRoutes);
+mount('/admin', adminRoutes);
+mount('/recovery', recoveryRoutes);
+mount('/analytics', analyticsRoutes);
+mount('/assistant', assistantRoutes);
+mount('/notifications', notificationsRoutes);
+mount('/telegram', telegramRoutes);
 
 // Global Error Handler
 app.use((err, req, res, next) => {

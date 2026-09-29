@@ -26,6 +26,13 @@ const usersToUpsert = [
     email: 'writetokumarsanthosh@gmail.com',
     role: 'student',
     avatar: 'https://images.unsplash.com/photo-1500648767791-00dcc994a43e?w=150&auto=format&fit=crop&q=80'
+  },
+  {
+    id: 'usr_demo_admin',
+    name: 'System Admin',
+    email: 'admin@findora.local',
+    role: 'admin',
+    avatar: 'https://images.unsplash.com/photo-1472099645785-5658abf4ff4e?w=150&auto=format&fit=crop&q=80'
   }
 ];
 

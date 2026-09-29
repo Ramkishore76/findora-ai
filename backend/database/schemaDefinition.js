@@ -1,9 +1,13 @@
+// FINDORA AI - Database Schema Definition
+// Embedded in JS so it never fails due to missing .sql files in serverless bundles
+
+module.exports = `
 CREATE TABLE IF NOT EXISTS users (
     id TEXT PRIMARY KEY,
     name TEXT NOT NULL,
     email TEXT UNIQUE NOT NULL,
     password_hash TEXT NOT NULL,
-    role TEXT NOT NULL DEFAULT 'user', -- 'user', 'admin', 'verification_officer'
+    role TEXT NOT NULL DEFAULT 'student',
     avatar TEXT,
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );
@@ -25,9 +29,18 @@ CREATE TABLE IF NOT EXISTS items (
     longitude REAL,
     event_time DATETIME NOT NULL,
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-    status TEXT NOT NULL DEFAULT 'OPEN', -- 'OPEN', 'MATCHED', 'CLAIMED', 'VERIFIED', 'RECOVERED', 'CLOSED'
+    status TEXT NOT NULL DEFAULT 'OPEN',
     owner_id TEXT NOT NULL,
-    condition TEXT, serial_number TEXT, unique_marks TEXT, damage_details TEXT, hidden_features TEXT, text_vector TEXT, image_hash TEXT, close_code TEXT, closed_at DATETIME, closed_by TEXT,
+    condition TEXT,
+    serial_number TEXT,
+    unique_marks TEXT,
+    damage_details TEXT,
+    hidden_features TEXT,
+    text_vector TEXT,
+    image_hash TEXT,
+    close_code TEXT,
+    closed_at DATETIME,
+    closed_by TEXT,
     FOREIGN KEY(owner_id) REFERENCES users(id)
 );
 
@@ -45,9 +58,9 @@ CREATE TABLE IF NOT EXISTS item_private_attributes (
 CREATE TABLE IF NOT EXISTS embeddings (
     id TEXT PRIMARY KEY,
     item_id TEXT NOT NULL UNIQUE,
-    text_vector TEXT NOT NULL, -- JSON array of semantic embedding tokens
+    text_vector TEXT NOT NULL,
     image_hash TEXT,
-    image_features TEXT, -- JSON array of visual feature vectors
+    image_features TEXT,
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY(item_id) REFERENCES items(id) ON DELETE CASCADE
 );
@@ -63,8 +76,8 @@ CREATE TABLE IF NOT EXISTS matches (
     time_score REAL NOT NULL,
     category_score REAL NOT NULL,
     attribute_score REAL NOT NULL,
-    explanation TEXT NOT NULL, -- JSON: { why, evidence: [], uncertainty: [] }
-    status TEXT NOT NULL DEFAULT 'PENDING', -- 'PENDING', 'CONFIRMED', 'DISMISSED'
+    explanation TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'PENDING',
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY(lost_item_id) REFERENCES items(id) ON DELETE CASCADE,
     FOREIGN KEY(found_item_id) REFERENCES items(id) ON DELETE CASCADE
@@ -72,85 +85,76 @@ CREATE TABLE IF NOT EXISTS matches (
 
 CREATE TABLE IF NOT EXISTS claims (
     id TEXT PRIMARY KEY,
-    match_id TEXT,
-    lost_item_id TEXT NOT NULL,
+    lost_item_id TEXT,
     found_item_id TEXT NOT NULL,
+    match_id TEXT,
     claimant_id TEXT NOT NULL,
-    status TEXT NOT NULL DEFAULT 'PENDING_VERIFICATION', -- 'PENDING_VERIFICATION', 'VERIFIED', 'UNDER_REVIEW', 'APPROVED', 'REJECTED'
-    verification_score REAL DEFAULT 0,
-    risk_score REAL DEFAULT 0,
-    risk_level TEXT DEFAULT 'LOW', -- 'LOW', 'MEDIUM', 'HIGH'
-    risk_factors TEXT DEFAULT '[]', -- JSON array of string reasons
-    verification_details TEXT DEFAULT '{}', -- JSON: { damage_match, sticker_match, unique_attr_match, notes }
-    admin_notes TEXT,
+    status TEXT NOT NULL DEFAULT 'CHALLENGE_ISSUED',
+    verification_score REAL,
+    risk_score REAL,
+    risk_level TEXT,
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-    FOREIGN KEY(lost_item_id) REFERENCES items(id),
-    FOREIGN KEY(found_item_id) REFERENCES items(id),
+    FOREIGN KEY(lost_item_id) REFERENCES items(id) ON DELETE CASCADE,
+    FOREIGN KEY(found_item_id) REFERENCES items(id) ON DELETE CASCADE,
     FOREIGN KEY(claimant_id) REFERENCES users(id)
 );
 
 CREATE TABLE IF NOT EXISTS claim_questions (
     id TEXT PRIMARY KEY,
     claim_id TEXT NOT NULL,
-    found_item_id TEXT NOT NULL,
-    question_key TEXT NOT NULL, -- 'unique_marks', 'damage_details', 'hidden_features'
-    prompt TEXT NOT NULL,
+    attribute_key TEXT NOT NULL,
+    question_text TEXT NOT NULL,
+    expected_value_hash TEXT NOT NULL,
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-    FOREIGN KEY(claim_id) REFERENCES claims(id) ON DELETE CASCADE,
-    FOREIGN KEY(found_item_id) REFERENCES items(id)
+    FOREIGN KEY(claim_id) REFERENCES claims(id) ON DELETE CASCADE
 );
 
 CREATE TABLE IF NOT EXISTS claim_answers (
     id TEXT PRIMARY KEY,
     claim_id TEXT NOT NULL,
     question_id TEXT NOT NULL,
-    claimant_answer TEXT NOT NULL,
-    confidence_score REAL DEFAULT 0,
-    matched INTEGER DEFAULT 0,
+    answer_text TEXT NOT NULL,
+    is_correct INTEGER,
+    similarity_score REAL,
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY(claim_id) REFERENCES claims(id) ON DELETE CASCADE,
-    FOREIGN KEY(question_id) REFERENCES claim_questions(id)
+    FOREIGN KEY(question_id) REFERENCES claim_questions(id) ON DELETE CASCADE
 );
 
 CREATE TABLE IF NOT EXISTS fraud_alerts (
     id TEXT PRIMARY KEY,
-    claim_id TEXT,
-    claimant_id TEXT NOT NULL,
+    claim_id TEXT NOT NULL,
+    user_id TEXT NOT NULL,
     risk_score REAL NOT NULL,
-    severity TEXT NOT NULL, -- 'LOW', 'MEDIUM', 'HIGH'
-    alert_type TEXT NOT NULL,
-    reasons TEXT NOT NULL, -- JSON array of strings
-    status TEXT NOT NULL DEFAULT 'ACTIVE', -- 'ACTIVE', 'DISMISSED', 'CONFIRMED'
+    reasons TEXT NOT NULL,
+    action_taken TEXT NOT NULL,
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-    FOREIGN KEY(claim_id) REFERENCES claims(id),
-    FOREIGN KEY(claimant_id) REFERENCES users(id)
+    FOREIGN KEY(claim_id) REFERENCES claims(id) ON DELETE CASCADE,
+    FOREIGN KEY(user_id) REFERENCES users(id)
 );
 
 CREATE TABLE IF NOT EXISTS recovery_cases (
-    id TEXT PRIMARY KEY, -- e.g. 'FR-2026-00091'
-    claim_id TEXT NOT NULL UNIQUE,
+    id TEXT PRIMARY KEY,
+    claim_id TEXT NOT NULL,
     item_id TEXT NOT NULL,
     claimant_id TEXT NOT NULL,
-    pickup_location TEXT NOT NULL,
-    handover_code TEXT NOT NULL, -- e.g. 'FND-8492'
-    status TEXT NOT NULL DEFAULT 'APPROVED', -- 'APPROVED', 'HANDOVER_PENDING', 'RECOVERED', 'CLOSED'
-    timeline TEXT NOT NULL, -- JSON array of { step, title, timestamp, completed, actor }
-    admin_id TEXT,
+    status TEXT NOT NULL DEFAULT 'AUTHORIZED',
+    handover_code TEXT NOT NULL,
+    qr_payload TEXT NOT NULL,
+    audit_notes TEXT,
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-    recovered_at DATETIME,
-    FOREIGN KEY(claim_id) REFERENCES claims(id),
-    FOREIGN KEY(item_id) REFERENCES items(id),
+    FOREIGN KEY(claim_id) REFERENCES claims(id) ON DELETE CASCADE,
+    FOREIGN KEY(item_id) REFERENCES items(id) ON DELETE CASCADE,
     FOREIGN KEY(claimant_id) REFERENCES users(id)
 );
 
 CREATE TABLE IF NOT EXISTS notifications (
     id TEXT PRIMARY KEY,
     user_id TEXT NOT NULL,
+    type TEXT NOT NULL,
     title TEXT NOT NULL,
     message TEXT NOT NULL,
-    type TEXT NOT NULL, -- 'MATCH_ALERT', 'CLAIM_UPDATE', 'HANDOVER_READY', 'FRAUD_ALERT'
-    data TEXT, -- JSON payload
+    data TEXT,
     read INTEGER DEFAULT 0,
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY(user_id) REFERENCES users(id)
@@ -160,18 +164,10 @@ CREATE TABLE IF NOT EXISTS audit_logs (
     id TEXT PRIMARY KEY,
     user_id TEXT,
     action TEXT NOT NULL,
-    target_type TEXT NOT NULL,
-    target_id TEXT NOT NULL,
+    entity_type TEXT NOT NULL,
+    entity_id TEXT,
     details TEXT,
-    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-);
-
-CREATE TABLE IF NOT EXISTS password_resets (
-    id TEXT PRIMARY KEY,
-    email TEXT NOT NULL,
-    token TEXT NOT NULL,
-    expires_at DATETIME NOT NULL,
-    used INTEGER DEFAULT 0,
+    ip_address TEXT,
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );
 
@@ -191,3 +187,4 @@ CREATE TABLE IF NOT EXISTS telegram_groups (
     added_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );
+`;
