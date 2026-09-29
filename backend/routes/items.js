@@ -58,9 +58,56 @@ router.post('/upload', upload.single('image'), async (req, res) => {
 });
 
 // List Public Items (Security rule: Never leak private attributes!)
-router.get('/', (req, res) => {
+router.get('/', async (req, res) => {
   try {
     const { type, category, building, search, status } = req.query;
+
+    if (db.pool) {
+      try {
+        let pgQuery = `
+          SELECT 
+            i.id, i.type, i.title, i.description, i.category, i.color, 
+            i.brand, i.model, i.image, i.location, i.building, i.floor,
+            i.event_time, i.created_at, i.status, i.owner_id, i.condition,
+            u.name as reporter_name
+          FROM items i
+          LEFT JOIN users u ON i.owner_id = u.id
+          WHERE 1=1
+        `;
+        const pgParams = [];
+        let pIdx = 1;
+
+        if (type) {
+          pgQuery += ` AND i.type = $${pIdx++}`;
+          pgParams.push(type.toUpperCase());
+        }
+        if (category) {
+          pgQuery += ` AND i.category = $${pIdx++}`;
+          pgParams.push(category);
+        }
+        if (building) {
+          pgQuery += ` AND i.building = $${pIdx++}`;
+          pgParams.push(building);
+        }
+        if (status) {
+          pgQuery += ` AND i.status = $${pIdx++}`;
+          pgParams.push(status);
+        }
+        if (search) {
+          pgQuery += ` AND (i.title ILIKE $${pIdx} OR i.description ILIKE $${pIdx} OR i.brand ILIKE $${pIdx} OR i.model ILIKE $${pIdx})`;
+          pIdx++;
+          pgParams.push(`%${search}%`);
+        }
+
+        pgQuery += ` ORDER BY i.created_at DESC`;
+        const pgRes = await db.pool.query(pgQuery, pgParams);
+        if (pgRes.rows) {
+          return res.json({ items: pgRes.rows, count: pgRes.rows.length });
+        }
+      } catch (poolErr) {
+        console.warn('[ITEMS SUPABASE POOL ERROR]:', poolErr.message);
+      }
+    }
 
     let query = `
       SELECT 
@@ -106,14 +153,32 @@ router.get('/', (req, res) => {
 });
 
 // Get Single Item by ID
-router.get('/:id', authenticateToken, (req, res) => {
+router.get('/:id', authenticateToken, async (req, res) => {
   try {
-    const item = db.prepare(`
-      SELECT i.*, u.name as reporter_name, u.email as reporter_email
-      FROM items i
-      LEFT JOIN users u ON i.owner_id = u.id
-      WHERE i.id = ?
-    `).get(req.params.id);
+    let item = null;
+
+    if (db.pool) {
+      try {
+        const itemRes = await db.pool.query(`
+          SELECT i.*, u.name as reporter_name, u.email as reporter_email
+          FROM items i
+          LEFT JOIN users u ON i.owner_id = u.id
+          WHERE i.id = $1
+        `, [req.params.id]);
+        if (itemRes.rows && itemRes.rows.length > 0) {
+          item = itemRes.rows[0];
+        }
+      } catch (poolErr) {}
+    }
+
+    if (!item) {
+      item = db.prepare(`
+        SELECT i.*, u.name as reporter_name, u.email as reporter_email
+        FROM items i
+        LEFT JOIN users u ON i.owner_id = u.id
+        WHERE i.id = ?
+      `).get(req.params.id);
+    }
 
     if (!item) {
       return res.status(404).json({ error: 'Item not found.' });
@@ -123,10 +188,18 @@ router.get('/:id', authenticateToken, (req, res) => {
     const isAuthorized = req.user && (req.user.id === item.owner_id || req.user.role === 'admin' || req.user.role === 'verification_officer');
 
     if (isAuthorized) {
-      const privateAttrs = db.prepare('SELECT * FROM item_private_attributes WHERE item_id = ?').get(item.id);
+      let privateAttrs = null;
+      if (db.pool) {
+        try {
+          const privRes = await db.pool.query('SELECT * FROM item_private_attributes WHERE item_id = $1', [item.id]);
+          if (privRes.rows && privRes.rows.length > 0) privateAttrs = privRes.rows[0];
+        } catch (e) {}
+      }
+      if (!privateAttrs) {
+        privateAttrs = db.prepare('SELECT * FROM item_private_attributes WHERE item_id = ?').get(item.id);
+      }
       item.private_attributes = privateAttrs || null;
     } else {
-      // Redact private attributes for safety!
       item.private_attributes = null;
     }
 

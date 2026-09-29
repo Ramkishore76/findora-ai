@@ -5,52 +5,123 @@ const { authenticateToken, requireOfficerOrAdmin, requireAdminOnly } = require('
 const { generateCaseId, generateHandoverCode, createTimeline } = require('../services/recovery');
 const { seedDatabase } = require('../database/seed');
 
-// Admin Command Center Dashboard Overview (Restricted to Officers and Admins)
-router.get('/dashboard', authenticateToken, requireOfficerOrAdmin, (req, res) => {
+router.get('/dashboard', authenticateToken, requireOfficerOrAdmin, async (req, res) => {
   try {
-    const totalLost = db.prepare("SELECT COUNT(*) as count FROM items WHERE type = 'LOST'").get().count;
-    const totalFound = db.prepare("SELECT COUNT(*) as count FROM items WHERE type = 'FOUND'").get().count;
-    const totalMatches = db.prepare("SELECT COUNT(*) as count FROM matches WHERE status != 'DISMISSED'").get().count;
-    const pendingClaims = db.prepare("SELECT COUNT(*) as count FROM claims WHERE status IN ('PENDING_VERIFICATION', 'UNDER_REVIEW')").get().count;
-    const totalRecovered = db.prepare("SELECT COUNT(*) as count FROM items WHERE status = 'RECOVERED'").get().count;
-    const activeRiskAlerts = db.prepare("SELECT COUNT(*) as count FROM fraud_alerts WHERE status = 'ACTIVE'").get().count;
+    let totalLost = 0;
+    let totalFound = 0;
+    let totalMatches = 0;
+    let pendingClaims = 0;
+    let totalRecovered = 0;
+    let activeRiskAlerts = 0;
+    let topMatches = [];
+    let claimsReview = [];
+    let fraudAlerts = [];
 
-    // Top Recent AI Matches
-    const topMatches = db.prepare(`
-      SELECT 
-        m.id, m.final_score, m.created_at,
-        l.title as lost_title, l.category,
-        f.title as found_title, f.building as found_building
-      FROM matches m
-      JOIN items l ON m.lost_item_id = l.id
-      JOIN items f ON m.found_item_id = f.id
-      ORDER BY m.final_score DESC, m.created_at DESC
-      LIMIT 5
-    `).all();
+    // 1. Direct Supabase Query (Primary authority on Vercel & Cloud)
+    if (db.pool) {
+      try {
+        const [
+          lostRes, foundRes, matchRes, claimRes, recovRes, alertRes,
+          topMatchesRes, claimsReviewRes, fraudAlertsRes
+        ] = await Promise.all([
+          db.pool.query("SELECT COUNT(*)::int as c FROM items WHERE type = 'LOST'"),
+          db.pool.query("SELECT COUNT(*)::int as c FROM items WHERE type = 'FOUND'"),
+          db.pool.query("SELECT COUNT(*)::int as c FROM matches WHERE status != 'DISMISSED'"),
+          db.pool.query("SELECT COUNT(*)::int as c FROM claims WHERE status IN ('PENDING_VERIFICATION', 'UNDER_REVIEW')"),
+          db.pool.query("SELECT COUNT(*)::int as c FROM items WHERE status = 'RECOVERED'"),
+          db.pool.query("SELECT COUNT(*)::int as c FROM fraud_alerts WHERE status = 'ACTIVE'"),
+          db.pool.query(`
+            SELECT 
+              m.id, m.final_score, m.created_at,
+              l.title as lost_title, l.category,
+              f.title as found_title, f.building as found_building
+            FROM matches m
+            JOIN items l ON m.lost_item_id = l.id
+            JOIN items f ON m.found_item_id = f.id
+            ORDER BY m.final_score DESC, m.created_at DESC
+            LIMIT 5
+          `),
+          db.pool.query(`
+            SELECT 
+              c.id, c.status, c.verification_score, c.risk_score, c.risk_level, c.created_at,
+              f.title as found_title, f.building,
+              u.name as claimant_name, u.email as claimant_email
+            FROM claims c
+            JOIN items f ON c.found_item_id = f.id
+            LEFT JOIN users u ON c.claimant_id = u.id
+            ORDER BY c.risk_score DESC, c.created_at DESC
+            LIMIT 8
+          `),
+          db.pool.query(`
+            SELECT 
+              fa.*, u.name as claimant_name, u.email as claimant_email
+            FROM fraud_alerts fa
+            LEFT JOIN users u ON fa.claimant_id = u.id
+            WHERE fa.status = 'ACTIVE'
+            ORDER BY fa.created_at DESC
+            LIMIT 5
+          `)
+        ]);
 
-    // Pending Claims for review
-    const claimsReview = db.prepare(`
-      SELECT 
-        c.id, c.status, c.verification_score, c.risk_score, c.risk_level, c.created_at,
-        f.title as found_title, f.building,
-        u.name as claimant_name, u.email as claimant_email
-      FROM claims c
-      JOIN items f ON c.found_item_id = f.id
-      LEFT JOIN users u ON c.claimant_id = u.id
-      ORDER BY c.risk_score DESC, c.created_at DESC
-      LIMIT 8
-    `).all();
+        totalLost = lostRes.rows[0]?.c || 0;
+        totalFound = foundRes.rows[0]?.c || 0;
+        totalMatches = matchRes.rows[0]?.c || 0;
+        pendingClaims = claimRes.rows[0]?.c || 0;
+        totalRecovered = recovRes.rows[0]?.c || 0;
+        activeRiskAlerts = alertRes.rows[0]?.c || 0;
+        topMatches = topMatchesRes.rows;
+        claimsReview = claimsReviewRes.rows;
+        fraudAlerts = fraudAlertsRes.rows;
+      } catch (poolErr) {
+        console.warn('[ADMIN DASHBOARD SUPABASE POOL ERROR]:', poolErr.message);
+      }
+    }
 
-    // Active Fraud Alerts
-    const fraudAlerts = db.prepare(`
-      SELECT 
-        fa.*, u.name as claimant_name, u.email as claimant_email
-      FROM fraud_alerts fa
-      LEFT JOIN users u ON fa.claimant_id = u.id
-      WHERE fa.status = 'ACTIVE'
-      ORDER BY fa.created_at DESC
-      LIMIT 5
-    `).all();
+    // 2. Local Cache Fallback
+    if (totalLost === 0 && totalFound === 0 && topMatches.length === 0) {
+      try {
+        totalLost = db.prepare("SELECT COUNT(*) as count FROM items WHERE type = 'LOST'").get()?.count || 0;
+        totalFound = db.prepare("SELECT COUNT(*) as count FROM items WHERE type = 'FOUND'").get()?.count || 0;
+        totalMatches = db.prepare("SELECT COUNT(*) as count FROM matches WHERE status != 'DISMISSED'").get()?.count || 0;
+        pendingClaims = db.prepare("SELECT COUNT(*) as count FROM claims WHERE status IN ('PENDING_VERIFICATION', 'UNDER_REVIEW')").get()?.count || 0;
+        totalRecovered = db.prepare("SELECT COUNT(*) as count FROM items WHERE status = 'RECOVERED'").get()?.count || 0;
+        activeRiskAlerts = db.prepare("SELECT COUNT(*) as count FROM fraud_alerts WHERE status = 'ACTIVE'").get()?.count || 0;
+
+        topMatches = db.prepare(`
+          SELECT 
+            m.id, m.final_score, m.created_at,
+            l.title as lost_title, l.category,
+            f.title as found_title, f.building as found_building
+          FROM matches m
+          JOIN items l ON m.lost_item_id = l.id
+          JOIN items f ON m.found_item_id = f.id
+          ORDER BY m.final_score DESC, m.created_at DESC
+          LIMIT 5
+        `).all();
+
+        claimsReview = db.prepare(`
+          SELECT 
+            c.id, c.status, c.verification_score, c.risk_score, c.risk_level, c.created_at,
+            f.title as found_title, f.building,
+            u.name as claimant_name, u.email as claimant_email
+          FROM claims c
+          JOIN items f ON c.found_item_id = f.id
+          LEFT JOIN users u ON c.claimant_id = u.id
+          ORDER BY c.risk_score DESC, c.created_at DESC
+          LIMIT 8
+        `).all();
+
+        fraudAlerts = db.prepare(`
+          SELECT 
+            fa.*, u.name as claimant_name, u.email as claimant_email
+          FROM fraud_alerts fa
+          LEFT JOIN users u ON fa.claimant_id = u.id
+          WHERE fa.status = 'ACTIVE'
+          ORDER BY fa.created_at DESC
+          LIMIT 5
+        `).all();
+      } catch (cacheErr) {}
+    }
 
     const formattedAlerts = fraudAlerts.map(a => {
       let parsedReasons = [];

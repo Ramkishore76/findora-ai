@@ -5,18 +5,42 @@ const { authenticateToken } = require('../middleware/auth');
 const { rankCandidates, DEFAULT_WEIGHTS } = require('../services/matching');
 
 // Get list of all matches
-router.get('/', authenticateToken, (req, res) => {
+router.get('/', authenticateToken, async (req, res) => {
   try {
-    const matches = db.prepare(`
-      SELECT 
-        m.*,
-        l.title as lost_title, l.image as lost_image, l.location as lost_location, l.building as lost_building, l.owner_id as lost_owner_id,
-        f.title as found_title, f.image as found_image, f.location as found_location, f.building as found_building, f.condition as found_condition
-      FROM matches m
-      JOIN items l ON m.lost_item_id = l.id
-      JOIN items f ON m.found_item_id = f.id
-      ORDER BY m.final_score DESC, m.created_at DESC
-    `).all();
+    let matches = [];
+
+    if (db.pool) {
+      try {
+        const matchesRes = await db.pool.query(`
+          SELECT 
+            m.*,
+            l.title as lost_title, l.image as lost_image, l.location as lost_location, l.building as lost_building, l.owner_id as lost_owner_id,
+            f.title as found_title, f.image as found_image, f.location as found_location, f.building as found_building, f.condition as found_condition
+          FROM matches m
+          JOIN items l ON m.lost_item_id = l.id
+          JOIN items f ON m.found_item_id = f.id
+          ORDER BY m.final_score DESC, m.created_at DESC
+        `);
+        matches = matchesRes.rows;
+      } catch (poolErr) {
+        console.warn('[MATCHES SUPABASE POOL ERROR]:', poolErr.message);
+      }
+    }
+
+    if (matches.length === 0) {
+      try {
+        matches = db.prepare(`
+          SELECT 
+            m.*,
+            l.title as lost_title, l.image as lost_image, l.location as lost_location, l.building as lost_building, l.owner_id as lost_owner_id,
+            f.title as found_title, f.image as found_image, f.location as found_location, f.building as found_building, f.condition as found_condition
+          FROM matches m
+          JOIN items l ON m.lost_item_id = l.id
+          JOIN items f ON m.found_item_id = f.id
+          ORDER BY m.final_score DESC, m.created_at DESC
+        `).all();
+      } catch (e) {}
+    }
 
     const formatted = matches.map(m => ({
       ...m,

@@ -262,20 +262,64 @@ router.post('/:id/verify', authenticateToken, requireAuth, (req, res) => {
 });
 
 // Get Single Claim with Questions & Status
-router.get('/:id', authenticateToken, requireAuth, (req, res) => {
+router.get('/:id', authenticateToken, requireAuth, async (req, res) => {
   try {
-    const claim = db.prepare(`
-      SELECT 
-        c.*,
-        l.title as lost_title, l.image as lost_image, l.location as lost_location,
-        f.title as found_title, f.image as found_image, f.location as found_location, f.building as found_building,
-        u.name as claimant_name, u.email as claimant_email
-      FROM claims c
-      LEFT JOIN items l ON c.lost_item_id = l.id
-      JOIN items f ON c.found_item_id = f.id
-      LEFT JOIN users u ON c.claimant_id = u.id
-      WHERE c.id = ?
-    `).get(req.params.id);
+    let claim = null;
+    let questions = [];
+    let answers = [];
+    let recoveryCase = null;
+
+    if (db.pool) {
+      try {
+        const claimRes = await db.pool.query(`
+          SELECT 
+            c.*,
+            l.title as lost_title, l.image as lost_image, l.location as lost_location,
+            f.title as found_title, f.image as found_image, f.location as found_location, f.building as found_building,
+            u.name as claimant_name, u.email as claimant_email
+          FROM claims c
+          LEFT JOIN items l ON c.lost_item_id = l.id
+          JOIN items f ON c.found_item_id = f.id
+          LEFT JOIN users u ON c.claimant_id = u.id
+          WHERE c.id = $1
+        `, [req.params.id]);
+
+        if (claimRes.rows && claimRes.rows.length > 0) {
+          claim = claimRes.rows[0];
+          const [qRes, aRes, recRes] = await Promise.all([
+            db.pool.query('SELECT id, question_key, prompt FROM claim_questions WHERE claim_id = $1', [claim.id]),
+            db.pool.query('SELECT * FROM claim_answers WHERE claim_id = $1', [claim.id]),
+            db.pool.query('SELECT * FROM recovery_cases WHERE claim_id = $1', [claim.id])
+          ]);
+          questions = qRes.rows || [];
+          answers = aRes.rows || [];
+          if (recRes.rows && recRes.rows.length > 0) recoveryCase = recRes.rows[0];
+        }
+      } catch (poolErr) {
+        console.warn('[CLAIMS POOL ERROR]:', poolErr.message);
+      }
+    }
+
+    if (!claim) {
+      claim = db.prepare(`
+        SELECT 
+          c.*,
+          l.title as lost_title, l.image as lost_image, l.location as lost_location,
+          f.title as found_title, f.image as found_image, f.location as found_location, f.building as found_building,
+          u.name as claimant_name, u.email as claimant_email
+        FROM claims c
+        LEFT JOIN items l ON c.lost_item_id = l.id
+        JOIN items f ON c.found_item_id = f.id
+        LEFT JOIN users u ON c.claimant_id = u.id
+        WHERE c.id = ?
+      `).get(req.params.id);
+
+      if (claim) {
+        questions = db.prepare('SELECT id, question_key, prompt FROM claim_questions WHERE claim_id = ?').all(claim.id);
+        answers = db.prepare('SELECT * FROM claim_answers WHERE claim_id = ?').all(claim.id);
+        recoveryCase = db.prepare('SELECT * FROM recovery_cases WHERE claim_id = ?').get(claim.id);
+      }
+    }
 
     if (!claim) {
       return res.status(404).json({ error: 'Claim not found.' });
@@ -286,23 +330,17 @@ router.get('/:id', authenticateToken, requireAuth, (req, res) => {
       return res.status(403).json({ error: 'Access denied: You can only view your own claim details.' });
     }
 
-    const questions = db.prepare('SELECT id, question_key, prompt FROM claim_questions WHERE claim_id = ?').all(claim.id);
-    const answers = db.prepare('SELECT * FROM claim_answers WHERE claim_id = ?').all(claim.id);
-
-    // Check if recovery case exists
-    const recoveryCase = db.prepare('SELECT * FROM recovery_cases WHERE claim_id = ?').get(claim.id);
-
     res.json({
       claim: {
         ...claim,
-        risk_factors: typeof claim.risk_factors === 'string' ? JSON.parse(claim.risk_factors || '[]') : claim.risk_factors,
-        verification_details: typeof claim.verification_details === 'string' ? JSON.parse(claim.verification_details || '{}') : claim.verification_details
+        risk_factors: typeof claim.risk_factors === 'string' ? JSON.parse(claim.risk_factors || '[]') : (claim.risk_factors || []),
+        verification_details: typeof claim.verification_details === 'string' ? JSON.parse(claim.verification_details || '{}') : (claim.verification_details || {})
       },
       questions,
       answers,
       recoveryCase: recoveryCase ? {
         ...recoveryCase,
-        timeline: typeof recoveryCase.timeline === 'string' ? JSON.parse(recoveryCase.timeline) : recoveryCase.timeline
+        timeline: typeof recoveryCase.timeline === 'string' ? JSON.parse(recoveryCase.timeline) : (recoveryCase.timeline || [])
       } : null
     });
   } catch (error) {
@@ -311,32 +349,60 @@ router.get('/:id', authenticateToken, requireAuth, (req, res) => {
 });
 
 // List Claims
-router.get('/', authenticateToken, requireAuth, (req, res) => {
+router.get('/', authenticateToken, requireAuth, async (req, res) => {
   try {
     const isAdmin = req.user && (req.user.role === 'admin' || req.user.role === 'verification_officer');
-    let query = `
-      SELECT 
-        c.*,
-        f.title as found_title, f.image as found_image, f.building as found_building,
-        u.name as claimant_name, u.email as claimant_email
-      FROM claims c
-      JOIN items f ON c.found_item_id = f.id
-      LEFT JOIN users u ON c.claimant_id = u.id
-    `;
-    const params = [];
+    let claims = [];
 
-    if (!isAdmin) {
-      query += ` WHERE c.claimant_id = ?`;
-      params.push(req.user.id);
+    if (db.pool) {
+      try {
+        let pgSql = `
+          SELECT 
+            c.*,
+            f.title as found_title, f.image as found_image, f.building as found_building,
+            u.name as claimant_name, u.email as claimant_email
+          FROM claims c
+          JOIN items f ON c.found_item_id = f.id
+          LEFT JOIN users u ON c.claimant_id = u.id
+        `;
+        const params = [];
+        if (!isAdmin) {
+          pgSql += ` WHERE c.claimant_id = $1`;
+          params.push(req.user.id);
+        }
+        pgSql += ` ORDER BY c.created_at DESC`;
+        const pgRes = await db.pool.query(pgSql, params);
+        if (pgRes.rows) claims = pgRes.rows;
+      } catch (poolErr) {
+        console.warn('[CLAIMS LIST POOL ERROR]:', poolErr.message);
+      }
     }
 
-    query += ` ORDER BY c.created_at DESC`;
-    const claims = db.prepare(query).all(...params);
+    if (claims.length === 0) {
+      let query = `
+        SELECT 
+          c.*,
+          f.title as found_title, f.image as found_image, f.building as found_building,
+          u.name as claimant_name, u.email as claimant_email
+        FROM claims c
+        JOIN items f ON c.found_item_id = f.id
+        LEFT JOIN users u ON c.claimant_id = u.id
+      `;
+      const params = [];
+
+      if (!isAdmin) {
+        query += ` WHERE c.claimant_id = ?`;
+        params.push(req.user.id);
+      }
+
+      query += ` ORDER BY c.created_at DESC`;
+      claims = db.prepare(query).all(...params);
+    }
 
     const formatted = claims.map(c => ({
       ...c,
-      risk_factors: typeof c.risk_factors === 'string' ? JSON.parse(c.risk_factors || '[]') : c.risk_factors,
-      verification_details: typeof c.verification_details === 'string' ? JSON.parse(c.verification_details || '{}') : c.verification_details
+      risk_factors: typeof c.risk_factors === 'string' ? JSON.parse(c.risk_factors || '[]') : (c.risk_factors || []),
+      verification_details: typeof c.verification_details === 'string' ? JSON.parse(c.verification_details || '{}') : (c.verification_details || {})
     }));
 
     res.json({ claims: formatted });
