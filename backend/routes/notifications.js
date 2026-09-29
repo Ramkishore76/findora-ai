@@ -4,20 +4,43 @@ const db = require('../database/db');
 const { authenticateToken } = require('../middleware/auth');
 
 // Get Notifications for Current User
-router.get('/', authenticateToken, (req, res) => {
+router.get('/', authenticateToken, async (req, res) => {
   try {
-    const activeUser = db.prepare('SELECT id FROM users LIMIT 1').get();
-    const userId = req.user ? req.user.id : (activeUser ? activeUser.id : null);
-    const notifications = db.prepare(`
-      SELECT * FROM notifications 
-      WHERE user_id = ? 
-      ORDER BY created_at DESC 
-      LIMIT 20
-    `).all(userId);
+    const userId = req.user ? req.user.id : null;
+    let notifications = [];
+
+    if (db.pool && userId) {
+      try {
+        const notifRes = await db.pool.query(`
+          SELECT * FROM notifications 
+          WHERE user_id = $1 
+          ORDER BY created_at DESC 
+          LIMIT 20
+        `, [userId]);
+        if (notifRes.rows) notifications = notifRes.rows;
+      } catch (poolErr) {
+        console.warn('[NOTIFICATIONS POOL ERROR]:', poolErr.message);
+      }
+    }
+
+    if (notifications.length === 0) {
+      const activeUser = db.prepare('SELECT id FROM users LIMIT 1').get();
+      const targetId = userId || (activeUser ? activeUser.id : null);
+      if (targetId) {
+        try {
+          notifications = db.prepare(`
+            SELECT * FROM notifications 
+            WHERE user_id = ? 
+            ORDER BY created_at DESC 
+            LIMIT 20
+          `).all(targetId);
+        } catch (e) {}
+      }
+    }
 
     const formatted = notifications.map(n => ({
       ...n,
-      data: typeof n.data === 'string' ? JSON.parse(n.data || '{}') : n.data
+      data: typeof n.data === 'string' ? JSON.parse(n.data || '{}') : (n.data || {})
     }));
 
     res.json({ notifications: formatted });

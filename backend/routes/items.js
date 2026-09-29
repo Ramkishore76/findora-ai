@@ -210,7 +210,7 @@ router.get('/:id', authenticateToken, async (req, res) => {
 });
 
 // Report Lost Item
-router.post('/lost', authenticateToken, (req, res) => {
+router.post('/lost', authenticateToken, async (req, res) => {
   try {
     const {
       title, description, category, color, brand, model,
@@ -227,55 +227,61 @@ router.post('/lost', authenticateToken, (req, res) => {
     const ownerId = req.user?.id || db.prepare('SELECT id FROM users LIMIT 1').get()?.id || 'usr_anonymous';
     const closeCode = generateHandoverCode();
 
-    const insertItem = db.prepare(`
-      INSERT INTO items (
-        id, type, title, description, category, color, brand, model,
-        image, location, building, floor, event_time, owner_id, status,
-        serial_number, unique_marks, damage_details, hidden_features,
-        latitude, longitude, close_code
-      ) VALUES (?, 'LOST', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'OPEN', ?, ?, ?, ?, ?, ?, ?)
-    `);
-
-    insertItem.run(
-      itemId,
-      title,
-      description,
-      category,
-      color || null,
-      brand || null,
-      model || null,
-      image || null,
-      location || `${building} Floor ${floor || 1}`,
-      building,
-      floor ? parseInt(floor) : 1,
-      event_time || new Date().toISOString(),
-      ownerId,
-      serial_number || null,
-      unique_marks || null,
-      damage_details || null,
-      hidden_features || null,
-      latitude ? parseFloat(latitude) : null,
-      longitude ? parseFloat(longitude) : null,
-      closeCode
-    );
-
     if (db.pool) {
-      db.pool.query(`
+      try {
+        await db.pool.query(`
+          INSERT INTO items (
+            id, type, title, description, category, color, brand, model,
+            image, location, building, floor, event_time, owner_id, status,
+            serial_number, unique_marks, damage_details, hidden_features,
+            latitude, longitude, close_code
+          ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22)
+          ON CONFLICT (id) DO UPDATE SET status = EXCLUDED.status, close_code = EXCLUDED.close_code
+        `, [
+          itemId, 'LOST', title, description, category, color || null, brand || null, model || null,
+          image || null, location || `${building} Floor ${floor || 1}`, building, floor ? parseInt(floor) : 1,
+          event_time ? new Date(event_time) : new Date(), ownerId, 'OPEN',
+          serial_number || null, unique_marks || null, damage_details || null, hidden_features || null,
+          latitude ? parseFloat(latitude) : null, longitude ? parseFloat(longitude) : null, closeCode
+        ]);
+      } catch (e) {
+        console.warn('[SUPABASE LOST ITEM ERROR]:', e.message);
+      }
+    }
+
+    try {
+      const insertItem = db.prepare(`
         INSERT INTO items (
           id, type, title, description, category, color, brand, model,
           image, location, building, floor, event_time, owner_id, status,
           serial_number, unique_marks, damage_details, hidden_features,
           latitude, longitude, close_code
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22)
-        ON CONFLICT (id) DO UPDATE SET status = EXCLUDED.status, close_code = EXCLUDED.close_code
-      `, [
-        itemId, 'LOST', title, description, category, color || null, brand || null, model || null,
-        image || null, location || `${building} Floor ${floor || 1}`, building, floor ? parseInt(floor) : 1,
-        event_time ? new Date(event_time) : new Date(), ownerId, 'OPEN',
-        serial_number || null, unique_marks || null, damage_details || null, hidden_features || null,
-        latitude ? parseFloat(latitude) : null, longitude ? parseFloat(longitude) : null, closeCode
-      ]).catch(e => console.warn('[SUPABASE LOST ITEM ERROR]:', e.message));
-    }
+        ) VALUES (?, 'LOST', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'OPEN', ?, ?, ?, ?, ?, ?, ?)
+      `);
+
+      insertItem.run(
+        itemId,
+        title,
+        description,
+        category,
+        color || null,
+        brand || null,
+        model || null,
+        image || null,
+        location || `${building} Floor ${floor || 1}`,
+        building,
+        floor ? parseInt(floor) : 1,
+        event_time || new Date().toISOString(),
+        ownerId,
+        serial_number || null,
+        unique_marks || null,
+        damage_details || null,
+        hidden_features || null,
+        latitude ? parseFloat(latitude) : null,
+        longitude ? parseFloat(longitude) : null,
+        closeCode
+      );
+    } catch (e) {}
 
     // Save private ownership clues table for backwards compatibility
     const privId = `priv_${itemId}`;
@@ -392,7 +398,7 @@ router.post('/lost', authenticateToken, (req, res) => {
 });
 
 // Report Found Item
-router.post('/found', authenticateToken, (req, res) => {
+router.post('/found', authenticateToken, async (req, res) => {
   try {
     const {
       title, description, category, color, brand, model,
@@ -409,55 +415,61 @@ router.post('/found', authenticateToken, (req, res) => {
     const ownerId = req.user?.id || db.prepare('SELECT id FROM users LIMIT 1').get()?.id || 'usr_anonymous';
     const closeCode = generateHandoverCode();
 
-    const insertItem = db.prepare(`
-      INSERT INTO items (
-        id, type, title, description, category, color, brand, model,
-        image, location, building, floor, event_time, owner_id, status, condition,
-        unique_marks, damage_details, hidden_features,
-        latitude, longitude, close_code
-      ) VALUES (?, 'FOUND', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'OPEN', ?, ?, ?, ?, ?, ?, ?)
-    `);
-
-    insertItem.run(
-      itemId,
-      title,
-      description,
-      category,
-      color || null,
-      brand || null,
-      model || null,
-      image || null,
-      location || `${building} Floor ${floor || 1}`,
-      building,
-      floor ? parseInt(floor) : 1,
-      event_time || new Date().toISOString(),
-      ownerId,
-      condition || 'Operational',
-      unique_marks || null,
-      damage_details || null,
-      hidden_features || null,
-      latitude ? parseFloat(latitude) : null,
-      longitude ? parseFloat(longitude) : null,
-      closeCode
-    );
-
     if (db.pool) {
-      db.pool.query(`
+      try {
+        await db.pool.query(`
+          INSERT INTO items (
+            id, type, title, description, category, color, brand, model,
+            image, location, building, floor, event_time, owner_id, status, condition,
+            unique_marks, damage_details, hidden_features,
+            latitude, longitude, close_code
+          ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22)
+          ON CONFLICT (id) DO UPDATE SET status = EXCLUDED.status, close_code = EXCLUDED.close_code
+        `, [
+          itemId, 'FOUND', title, description, category, color || null, brand || null, model || null,
+          image || null, location || `${building} Floor ${floor || 1}`, building, floor ? parseInt(floor) : 1,
+          event_time ? new Date(event_time) : new Date(), ownerId, 'OPEN',
+          condition || 'Operational', unique_marks || null, damage_details || null, hidden_features || null,
+          latitude ? parseFloat(latitude) : null, longitude ? parseFloat(longitude) : null, closeCode
+        ]);
+      } catch (e) {
+        console.warn('[SUPABASE FOUND ITEM ERROR]:', e.message);
+      }
+    }
+
+    try {
+      const insertItem = db.prepare(`
         INSERT INTO items (
           id, type, title, description, category, color, brand, model,
-          image, location, building, floor, event_time, owner_id, status,
-          condition, unique_marks, damage_details, hidden_features,
+          image, location, building, floor, event_time, owner_id, status, condition,
+          unique_marks, damage_details, hidden_features,
           latitude, longitude, close_code
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22)
-        ON CONFLICT (id) DO UPDATE SET status = EXCLUDED.status, close_code = EXCLUDED.close_code
-      `, [
-        itemId, 'FOUND', title, description, category, color || null, brand || null, model || null,
-        image || null, location || `${building} Floor ${floor || 1}`, building, floor ? parseInt(floor) : 1,
-        event_time ? new Date(event_time) : new Date(), ownerId, 'OPEN',
-        condition || 'Operational', unique_marks || null, damage_details || null, hidden_features || null,
-        latitude ? parseFloat(latitude) : null, longitude ? parseFloat(longitude) : null, closeCode
-      ]).catch(e => console.warn('[SUPABASE FOUND ITEM ERROR]:', e.message));
-    }
+        ) VALUES (?, 'FOUND', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'OPEN', ?, ?, ?, ?, ?, ?, ?)
+      `);
+
+      insertItem.run(
+        itemId,
+        title,
+        description,
+        category,
+        color || null,
+        brand || null,
+        model || null,
+        image || null,
+        location || `${building} Floor ${floor || 1}`,
+        building,
+        floor ? parseInt(floor) : 1,
+        event_time || new Date().toISOString(),
+        ownerId,
+        condition || 'Operational',
+        unique_marks || null,
+        damage_details || null,
+        hidden_features || null,
+        latitude ? parseFloat(latitude) : null,
+        longitude ? parseFloat(longitude) : null,
+        closeCode
+      );
+    } catch (e) {}
 
     // Save private observations table for backwards compatibility
     const privId = `priv_${itemId}`;

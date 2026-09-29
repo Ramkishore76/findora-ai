@@ -15,7 +15,19 @@ router.post('/register', async (req, res) => {
     }
 
     const normalizedEmail = email.trim().toLowerCase();
-    const existing = db.prepare('SELECT id FROM users WHERE LOWER(email) = ?').get(normalizedEmail);
+    
+    // Check existing across Supabase and local cache
+    let existing = null;
+    if (db.pool) {
+      try {
+        const checkRes = await db.pool.query('SELECT id FROM users WHERE LOWER(email) = $1', [normalizedEmail]);
+        if (checkRes.rows && checkRes.rows.length > 0) existing = checkRes.rows[0];
+      } catch (e) {}
+    }
+    if (!existing) {
+      existing = db.prepare('SELECT id FROM users WHERE LOWER(email) = ?').get(normalizedEmail);
+    }
+
     if (existing) {
       return res.status(409).json({ error: 'An account with this email address already exists.' });
     }
@@ -43,16 +55,22 @@ router.post('/register', async (req, res) => {
       assignedRole = 'student';
     }
 
-    db.prepare(`
-      INSERT INTO users (id, name, email, password_hash, role)
-      VALUES (?, ?, ?, ?, ?)
-    `).run(id, name.trim(), normalizedEmail, passwordHash, assignedRole);
+    try {
+      db.prepare(`
+        INSERT INTO users (id, name, email, password_hash, role)
+        VALUES (?, ?, ?, ?, ?)
+      `).run(id, name.trim(), normalizedEmail, passwordHash, assignedRole);
+    } catch (e) {}
 
     if (db.pool) {
-      db.pool.query(
-        'INSERT INTO users (id, name, email, password_hash, role) VALUES ($1, $2, $3, $4, $5) ON CONFLICT (email) DO NOTHING',
-        [id, name.trim(), normalizedEmail, passwordHash, assignedRole]
-      ).catch(e => console.warn('[SUPABASE USER INSERT ERROR]:', e.message));
+      try {
+        await db.pool.query(
+          'INSERT INTO users (id, name, email, password_hash, role) VALUES ($1, $2, $3, $4, $5) ON CONFLICT (email) DO NOTHING',
+          [id, name.trim(), normalizedEmail, passwordHash, assignedRole]
+        );
+      } catch (poolErr) {
+        console.warn('[SUPABASE USER INSERT ERROR]:', poolErr.message);
+      }
     }
 
     const token = jwt.sign(
@@ -84,21 +102,26 @@ router.post('/login', async (req, res) => {
     }
 
     const normalizedEmail = email.trim().toLowerCase();
-    let user = db.prepare('SELECT * FROM users WHERE LOWER(email) = ?').get(normalizedEmail);
-    
-    // Direct Supabase fallback query if not in local cache
-    if (!user && db.pool) {
+    let user = null;
+
+    // Check Supabase directly for accurate multi-device auth
+    if (db.pool) {
       try {
         const pgRes = await db.pool.query('SELECT * FROM users WHERE LOWER(email) = $1', [normalizedEmail]);
         if (pgRes.rows && pgRes.rows.length > 0) {
           user = pgRes.rows[0];
-          // cache locally
-          db.prepare('INSERT OR REPLACE INTO users (id, name, email, password_hash, role, avatar) VALUES (?, ?, ?, ?, ?, ?)')
-            .run(user.id, user.name, user.email, user.password_hash, user.role, user.avatar);
+          try {
+            db.prepare('INSERT INTO users (id, name, email, password_hash, role, avatar) VALUES (?, ?, ?, ?, ?, ?)')
+              .run(user.id, user.name, user.email, user.password_hash, user.role, user.avatar);
+          } catch (e) {}
         }
       } catch (pgErr) {
         console.warn('[SUPABASE LOGIN QUERY ERROR]:', pgErr.message);
       }
+    }
+
+    if (!user) {
+      user = db.prepare('SELECT * FROM users WHERE LOWER(email) = ?').get(normalizedEmail);
     }
 
     if (!user) {
@@ -133,16 +156,38 @@ router.post('/login', async (req, res) => {
   }
 });
 
-// 3. Get Current User Profile (Verifies Session)
-router.get('/me', authenticateToken, (req, res) => {
+// 3. Get Current User Profile (Verifies Session across reloads and devices)
+router.get('/me', authenticateToken, async (req, res) => {
   try {
     if (!req.user) {
       return res.status(401).json({ error: 'Authentication required.' });
     }
-    const user = db.prepare('SELECT id, name, email, role, avatar FROM users WHERE id = ?').get(req.user.id);
-    if (!user) {
-      return res.status(404).json({ error: 'User profile not found.' });
+
+    let user = null;
+    if (db.pool) {
+      try {
+        const pgRes = await db.pool.query('SELECT id, name, email, role, avatar FROM users WHERE id = $1', [req.user.id]);
+        if (pgRes.rows && pgRes.rows.length > 0) {
+          user = pgRes.rows[0];
+        }
+      } catch (e) {}
     }
+
+    if (!user) {
+      user = db.prepare('SELECT id, name, email, role, avatar FROM users WHERE id = ?').get(req.user.id);
+    }
+
+    if (!user) {
+      // Fallback from verified JWT token payload so user is never logged out unexpectedly
+      user = {
+        id: req.user.id,
+        name: req.user.name || 'Findora User',
+        email: req.user.email || '',
+        role: req.user.role || 'student',
+        avatar: null
+      };
+    }
+
     const normalizedRole = user.role === 'user' ? 'student' : user.role;
     res.json({ user: { ...user, role: normalizedRole } });
   } catch (error) {
