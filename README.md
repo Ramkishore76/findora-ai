@@ -42,6 +42,12 @@
 ![Cloudinary Media Library](docs/assets/cloudinary_media_library.png)
 *Authentic live camera captures automatically tagged with GPS coordinates, campus location stamps, and tamper-proof evidence watermarks in Cloudinary `findora_items`.*
 
+<br/>
+
+### 🗄️ Supabase PostgreSQL Live Cloud Ledger
+![Supabase SQL Ledger](docs/assets/supabase_sql_ledger.png)
+*Real-time relational ledger tracking reported items, student/officer roles, Cloudinary CDN references, and secure custody lifecycles across all campus devices.*
+
 </div>
 
 ---
