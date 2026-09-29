@@ -83,5 +83,29 @@ FINDORA AI provides a fully autonomous lost & found lifecycle:
 
 ---
 
+## 🤖 Telegram Bot & Official Campus Community Group
+
+FINDORA AI features real-time notifications, interactive status lookups, and visual summaries via Telegram:
+* **Personal 1-on-1 Student Bot**: [@findoravsb_bot](https://t.me/findoravsb_bot)
+  * `/code <item_id>`: Safely reveals confidential 1-Time Handover Codes.
+  * `/myreports`: Lists reports filed by the student and secret claim codes.
+  * `/status <item_id>`: Real-time search status lookup.
+* **Campus Community Group**: [Join Findora Group](https://t.me/+V_U9BauJqKQ2NzE1)
+  * `/summary`: Comprehensive visual campus lost & found breakdown with photos, locations & GPS coordinates.
+  * `/lost` & `/found`: Instant campus registry browsing.
+
+---
+
+## 👥 Core Contributors & Engineering Team
+
+| Contributor | GitHub | Role |
+| :--- | :--- | :--- |
+| **Tharun Kumar** | [@Tharun4743](https://github.com/Tharun4743) | System Architecture, Database Schema & Lead Engineer |
+| **Tamilselvan** | [@admin963703](https://github.com/admin963703) | AI Candidate Retrieval, Fraud Risk Engine & Handover Lifecycle |
+| **RAMKISHORE SM** | [@Ramkishore76](https://github.com/Ramkishore76) | React Frontend, Match Hero Console & Campus Spatial Telemetry |
+| **VSB IT Department** | [@VSBECIT](https://github.com/VSBECIT) | Telegram Bot Integration, Group Visual Summaries & Campus Hub |
+
+---
+
 ## 📄 License & Attribution
 Developed for the Autonomous Lost & Found Hackathon MVP. 2026.
