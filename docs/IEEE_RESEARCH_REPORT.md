@@ -1,9 +1,16 @@
 # FINDORA AI: Autonomous Campus Lost & Found Intelligence Network Using Multimodal Correlation, Zero-Knowledge Verification, and Spatio-Temporal Decay
 
+**Team Name**: Techsquad  
 **Team Number**: 22  
-**Institutional Affiliation**: V.S.B. Engineering College (VSBEC)  
+**Team Members / Authors**:  
+- Tharunkumar K (`tharun4743@gmail.com`)  
+- Tamilselvan S (`tamilselvan@vsbec.ac.in`)  
+- Ramkishore SM (`ramkishore@vsbec.ac.in`)  
+**Institutional Affiliation**: Department of Information Technology, V.S.B. Engineering College (VSBEC), Karur, India  
 **Track / Problem Statement**: Smart Lost and Found Management System  
 **Conference / Symposia Format**: IEEE Standard Two-Column Style Technical Paper  
+**Compiled PDF**: [`docs/findora_ieee_report.pdf`](findora_ieee_report.pdf) (Exact 4 Pages)  
+**LaTeX Source**: [`docs/findora_ieee_report.tex`](findora_ieee_report.tex)  
 
 ---
 
