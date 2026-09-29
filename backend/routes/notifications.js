@@ -1,0 +1,51 @@
+const express = require('express');
+const router = express.Router();
+const db = require('../database/db');
+const { authenticateToken } = require('../middleware/auth');
+
+// Get Notifications for Current User
+router.get('/', authenticateToken, (req, res) => {
+  try {
+    const activeUser = db.prepare('SELECT id FROM users LIMIT 1').get();
+    const userId = req.user ? req.user.id : (activeUser ? activeUser.id : null);
+    const notifications = db.prepare(`
+      SELECT * FROM notifications 
+      WHERE user_id = ? 
+      ORDER BY created_at DESC 
+      LIMIT 20
+    `).all(userId);
+
+    const formatted = notifications.map(n => ({
+      ...n,
+      data: typeof n.data === 'string' ? JSON.parse(n.data || '{}') : n.data
+    }));
+
+    res.json({ notifications: formatted });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Mark Notification as Read
+router.post('/:id/read', authenticateToken, (req, res) => {
+  try {
+    db.prepare('UPDATE notifications SET read = 1 WHERE id = ?').run(req.params.id);
+    res.json({ success: true });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Mark All as Read
+router.post('/read-all', authenticateToken, (req, res) => {
+  try {
+    const activeUser = db.prepare('SELECT id FROM users LIMIT 1').get();
+    const userId = req.user ? req.user.id : (activeUser ? activeUser.id : null);
+    db.prepare('UPDATE notifications SET read = 1 WHERE user_id = ?').run(userId);
+    res.json({ success: true });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+module.exports = router;
