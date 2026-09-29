@@ -53,7 +53,8 @@ class TelegramBotService {
         if (!process.env.VERCEL) {
           this.startPolling();
         } else {
-          console.log(`[TELEGRAM BOT] ℹ️ Running in Serverless mode on Vercel (Polling disabled; broadcast & webhooks ready)`);
+          console.log(`[TELEGRAM BOT] ℹ️ Running in Serverless mode on Vercel (Ensuring Webhook is active)`);
+          this.ensureWebhook().catch(e => console.warn('[TELEGRAM WEBHOOK WARNING]:', e.message));
         }
       } else {
         this.connected = false;
@@ -65,6 +66,30 @@ class TelegramBotService {
       this.connected = false;
       this.lastError = err.message;
       console.error(`[TELEGRAM BOT] ❌ Network error connecting to Telegram: ${err.message}`);
+    }
+  }
+
+  /**
+   * Ensure Webhook is set for Vercel Serverless
+   */
+  async ensureWebhook() {
+    if (!this.token) return;
+    try {
+      const webhookUrl = 'https://findoravsbec.vercel.app/api/telegram/webhook';
+      const res = await fetch(`${this.apiUrl}/setWebhook`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          url: webhookUrl,
+          allowed_updates: ['message', 'my_chat_member', 'chat_member']
+        })
+      });
+      const data = await res.json();
+      if (data.ok) {
+        console.log(`[TELEGRAM BOT] 🔗 Live webhook linked: ${webhookUrl}`);
+      }
+    } catch (e) {
+      console.warn('[TELEGRAM BOT] Webhook auto-setup warning:', e.message);
     }
   }
 
@@ -245,9 +270,21 @@ To view your private 1-Time Handover Code, message me directly in private chat: 
   }
 
   /**
-   * Register or update subscriber in SQLite
+   * Register or update subscriber in Supabase & Local Cache
    */
-  registerSubscriber(chatId, username, firstName) {
+  async registerSubscriber(chatId, username, firstName) {
+    if (db.pool) {
+      try {
+        await db.pool.query(`
+          INSERT INTO telegram_subscribers (chat_id, username, first_name, role, subscribed_at)
+          VALUES ($1, $2, $3, 'student', NOW())
+          ON CONFLICT (chat_id) DO UPDATE SET
+            username = EXCLUDED.username,
+            first_name = EXCLUDED.first_name
+        `, [chatId, username || 'Anonymous', firstName || 'User']);
+      } catch (e) {}
+    }
+
     try {
       db.prepare(`
         INSERT INTO telegram_subscribers (chat_id, username, first_name, subscribed_at)
@@ -256,15 +293,28 @@ To view your private 1-Time Handover Code, message me directly in private chat: 
           username = excluded.username,
           first_name = excluded.first_name
       `).run(chatId, username || 'Anonymous', firstName || 'User');
-    } catch (e) {
-      console.error('[TELEGRAM BOT] Error saving subscriber:', e.message);
-    }
+    } catch (e) {}
   }
 
   /**
-   * Register or update campus community group in SQLite
+   * Register or update campus community group in Supabase & Local Cache
    */
-  registerGroup(chatId, title, type) {
+  async registerGroup(chatId, title, type) {
+    if (db.pool) {
+      try {
+        await db.pool.query(`
+          INSERT INTO telegram_groups (chat_id, title, type, is_active, updated_at)
+          VALUES ($1, $2, $3, 1, NOW())
+          ON CONFLICT (chat_id) DO UPDATE SET
+            title = EXCLUDED.title,
+            type = EXCLUDED.type,
+            is_active = 1,
+            updated_at = NOW()
+        `, [chatId, title || 'Campus Community Group', type || 'supergroup']);
+        console.log(`[TELEGRAM BOT] 📌 Campus Group active in Supabase: "${title}" (${chatId})`);
+      } catch (e) {}
+    }
+
     try {
       db.prepare(`
         INSERT INTO telegram_groups (chat_id, title, type, is_active, updated_at)
@@ -275,26 +325,21 @@ To view your private 1-Time Handover Code, message me directly in private chat: 
           is_active = 1,
           updated_at = CURRENT_TIMESTAMP
       `).run(chatId, title || 'Campus Community Group', type || 'supergroup');
-      console.log(`[TELEGRAM BOT] 📌 Campus Group active: "${title}" (${chatId})`);
-    } catch (e) {
-      console.error('[TELEGRAM BOT] Error saving group:', e.message);
-    }
+    } catch (e) {}
   }
 
   /**
    * Deactivate group when bot is removed
    */
-  deactivateGroup(chatId) {
-    try {
-      db.prepare(`
-        UPDATE telegram_groups
-        SET is_active = 0, updated_at = CURRENT_TIMESTAMP
-        WHERE chat_id = ?
-      `).run(chatId);
-      console.log(`[TELEGRAM BOT] ℹ️ Group deactivated: ${chatId}`);
-    } catch (e) {
-      console.error('[TELEGRAM BOT] Error deactivating group:', e.message);
+  async deactivateGroup(chatId) {
+    if (db.pool) {
+      try {
+        await db.pool.query('UPDATE telegram_groups SET is_active = 0, updated_at = NOW() WHERE chat_id = $1', [chatId]);
+      } catch (e) {}
     }
+    try {
+      db.prepare('UPDATE telegram_groups SET is_active = 0, updated_at = CURRENT_TIMESTAMP WHERE chat_id = ?').run(chatId);
+    } catch (e) {}
   }
 
   /**
@@ -320,6 +365,8 @@ Hello ${name}! I am your personal campus AI assistant for tracking lost items, c
 Join our campus-wide group for real-time broadcasts and photos:
 👉 [Join Findora Campus Group](${this.campusGroupLink})
 
+🌐 *Web Portal:* https://findoravsbec.vercel.app
+
 🔔 *Notifications:*
 You are registered for direct alerts whenever an item matching yours is found or updated!`;
 
@@ -342,6 +389,8 @@ This group receives automatic campus-wide broadcasts for newly reported lost ite
 📸 \`/report\` — Guide to report items via Live Camera portal
 ❓ \`/help\` — Full command list
 
+🌐 *Live Portal:* https://findoravsbec.vercel.app
+
 🔒 *Students:* For private 1-Time Handover Codes, please message [@${this.botUsername}](https://t.me/${this.botUsername}) in direct chat!`;
 
     await this.sendMessage(chatId, text, { parse_mode: 'Markdown' });
@@ -352,23 +401,32 @@ This group receives automatic campus-wide broadcasts for newly reported lost ite
    */
   async handleGroupSummaryCommand(chatId, isGroup = false) {
     try {
-      const lostItems = db.prepare(`
-        SELECT id, title, category, building, floor, location, latitude, longitude, image, brand, event_time
-        FROM items
-        WHERE type = 'LOST' AND status = 'OPEN'
-        ORDER BY created_at DESC
-      `).all() || [];
+      let lostItems = [];
+      let foundItems = [];
+      let recoveredCount = 0;
 
-      const foundItems = db.prepare(`
-        SELECT id, title, category, building, floor, location, latitude, longitude, image, condition, event_time
-        FROM items
-        WHERE type = 'FOUND' AND status = 'OPEN'
-        ORDER BY created_at DESC
-      `).all() || [];
+      if (db.pool) {
+        try {
+          const [lostRes, foundRes, recRes] = await Promise.all([
+            db.pool.query("SELECT id, title, category, building, floor, location, latitude, longitude, image, brand, event_time FROM items WHERE type = 'LOST' AND status = 'OPEN' ORDER BY created_at DESC"),
+            db.pool.query("SELECT id, title, category, building, floor, location, latitude, longitude, image, condition, event_time FROM items WHERE type = 'FOUND' AND status = 'OPEN' ORDER BY created_at DESC"),
+            db.pool.query("SELECT count(*)::int as count FROM items WHERE status IN ('RECOVERED', 'CLOSED')")
+          ]);
+          lostItems = lostRes.rows || [];
+          foundItems = foundRes.rows || [];
+          recoveredCount = recRes.rows[0]?.count || 0;
+        } catch (poolErr) {
+          console.warn('[TELEGRAM SUMMARY POOL ERROR]:', poolErr.message);
+        }
+      }
 
-      const recoveredCount = db.prepare(`
-        SELECT count(*) as count FROM items WHERE status IN ('RECOVERED', 'CLOSED')
-      `).get()?.count || 0;
+      if (lostItems.length === 0 && foundItems.length === 0) {
+        try {
+          lostItems = db.prepare("SELECT id, title, category, building, floor, location, latitude, longitude, image, brand, event_time FROM items WHERE type = 'LOST' AND status = 'OPEN' ORDER BY created_at DESC").all() || [];
+          foundItems = db.prepare("SELECT id, title, category, building, floor, location, latitude, longitude, image, condition, event_time FROM items WHERE type = 'FOUND' AND status = 'OPEN' ORDER BY created_at DESC").all() || [];
+          recoveredCount = db.prepare("SELECT count(*) as count FROM items WHERE status IN ('RECOVERED', 'CLOSED')").get()?.count || 0;
+        } catch (e) {}
+      }
 
       // Group counts by facility / building
       const facilities = {};
@@ -389,7 +447,7 @@ This group receives automatic campus-wide broadcasts for newly reported lost ite
 • 🔍 *Active Lost Items:* ${lostItems.length}
 • 📦 *Active Found Items Staged:* ${foundItems.length}
 • 🎉 *Officially Recovered:* ${recoveredCount}
-• 🌐 *Web Portal:* http://localhost:3000
+• 🌐 *Web Portal:* https://findoravsbec.vercel.app
 
 🏛️ *Activity by Facility:*
 ${facilityBreakdown}`;
@@ -425,7 +483,7 @@ ${facilityBreakdown}`;
           }
           detailedBody += `   🆔 \`${item.id}\`\n`;
         });
-        detailedBody += `\n🔑 *To claim:* Submit verification via http://localhost:3000 or contact Campus Security.`;
+        detailedBody += `\n🔑 *To claim:* Submit verification via https://findoravsbec.vercel.app or contact Campus Security.`;
       } else {
         detailedBody += `\n📦 *No unclaimed found items currently staged.*\n`;
       }
@@ -473,7 +531,7 @@ ${summaryHeader}`.substring(0, 1024);
 • \`/myreports\` — View all your reports and codes
 • \`/close <code>\` — Verification Officers custody code verification
 
-🌐 *Web Portal:* http://localhost:3000`;
+🌐 *Web Portal:* https://findoravsbec.vercel.app`;
       await this.sendMessage(chatId, text, { parse_mode: 'Markdown' });
     } else {
       const text = 
@@ -495,7 +553,7 @@ Join our community group for visual photo summaries and campus alerts:
 • \`/close <code>\` (or \`/verify <code>\`) — Enter the 1-time code provided by the student (e.g. \`/close FND-AB123\`). This verifies custody, marks the item RECOVERED, and officially closes the search in the registry!
 
 *Web Portal:*
-🌐 http://localhost:3000`;
+🌐 https://findoravsbec.vercel.app`;
       await this.sendMessage(chatId, text, { parse_mode: 'Markdown' });
     }
   }
@@ -505,13 +563,32 @@ Join our community group for visual photo summaries and campus alerts:
    */
   async handleLostCommand(chatId, isGroup = false) {
     try {
-      const items = db.prepare(`
-        SELECT id, title, category, building, floor, location, latitude, longitude, image, event_time
-        FROM items
-        WHERE type = 'LOST' AND status = 'OPEN'
-        ORDER BY created_at DESC
-        LIMIT 5
-      `).all();
+      let items = [];
+
+      if (db.pool) {
+        try {
+          const res = await db.pool.query(`
+            SELECT id, title, category, building, floor, location, latitude, longitude, image, event_time
+            FROM items
+            WHERE type = 'LOST' AND status = 'OPEN'
+            ORDER BY created_at DESC
+            LIMIT 5
+          `);
+          items = res.rows || [];
+        } catch (e) {}
+      }
+
+      if (items.length === 0) {
+        try {
+          items = db.prepare(`
+            SELECT id, title, category, building, floor, location, latitude, longitude, image, event_time
+            FROM items
+            WHERE type = 'LOST' AND status = 'OPEN'
+            ORDER BY created_at DESC
+            LIMIT 5
+          `).all() || [];
+        } catch (e) {}
+      }
 
       if (!items || items.length === 0) {
         await this.sendMessage(chatId, '✅ Great news! There are currently no active lost item reports on campus.');
@@ -525,13 +602,13 @@ Join our community group for visual photo summaries and campus alerts:
         response += `📍 Location: ${item.building} (Floor ${item.floor || 1})\n`;
         if (item.location) response += `📌 Details: ${item.location}\n`;
         if (item.latitude && item.longitude) {
-          response += `🛰️ GPS: \`${item.latitude.toFixed(4)}°N, ${item.longitude.toFixed(4)}°E\`\n`;
+          response += `🛰️ GPS: \`${parseFloat(item.latitude).toFixed(4)}°N, ${parseFloat(item.longitude).toFixed(4)}°E\`\n`;
         }
         response += `🕒 Time: ${new Date(item.event_time).toLocaleString()}\n`;
         response += `🆔 ID: \`${item.id}\`\n\n`;
       });
 
-      response += `If you found any of these items, please message /found or bring it to the Central Library security desk!`;
+      response += `If you found any of these items, please message /found or bring it to the Central Library security desk!\n🌐 https://findoravsbec.vercel.app`;
       
       const itemWithImage = items.find(i => i.image);
       if (itemWithImage && itemWithImage.image) {
@@ -549,13 +626,32 @@ Join our community group for visual photo summaries and campus alerts:
    */
   async handleFoundCommand(chatId, isGroup = false) {
     try {
-      const items = db.prepare(`
-        SELECT id, title, category, building, floor, location, latitude, longitude, condition, image, event_time
-        FROM items
-        WHERE type = 'FOUND' AND status = 'OPEN'
-        ORDER BY created_at DESC
-        LIMIT 5
-      `).all();
+      let items = [];
+
+      if (db.pool) {
+        try {
+          const res = await db.pool.query(`
+            SELECT id, title, category, building, floor, location, latitude, longitude, condition, image, event_time
+            FROM items
+            WHERE type = 'FOUND' AND status = 'OPEN'
+            ORDER BY created_at DESC
+            LIMIT 5
+          `);
+          items = res.rows || [];
+        } catch (e) {}
+      }
+
+      if (items.length === 0) {
+        try {
+          items = db.prepare(`
+            SELECT id, title, category, building, floor, location, latitude, longitude, condition, image, event_time
+            FROM items
+            WHERE type = 'FOUND' AND status = 'OPEN'
+            ORDER BY created_at DESC
+            LIMIT 5
+          `).all() || [];
+        } catch (e) {}
+      }
 
       if (!items || items.length === 0) {
         await this.sendMessage(chatId, '📦 No unclaimed found items currently registered.');
@@ -569,12 +665,12 @@ Join our community group for visual photo summaries and campus alerts:
         response += `📍 Staged At: ${item.building} (Floor ${item.floor || 1})\n`;
         response += `⚙️ Condition: ${item.condition || 'Operational'}\n`;
         if (item.latitude && item.longitude) {
-          response += `🛰️ GPS: \`${item.latitude.toFixed(4)}°N, ${item.longitude.toFixed(4)}°E\`\n`;
+          response += `🛰️ GPS: \`${parseFloat(item.latitude).toFixed(4)}°N, ${parseFloat(item.longitude).toFixed(4)}°E\`\n`;
         }
         response += `🆔 ID: \`${item.id}\`\n\n`;
       });
 
-      response += `To claim an item, submit a claim through the Findora web portal (http://localhost:3000) or contact Campus Security.`;
+      response += `To claim an item, submit a claim through the Findora web portal: https://findoravsbec.vercel.app or contact Campus Security.`;
       
       const itemWithImage = items.find(i => i.image);
       if (itemWithImage && itemWithImage.image) {
@@ -592,18 +688,36 @@ Join our community group for visual photo summaries and campus alerts:
    */
   async handleStatusCommand(chatId, args, isGroup = false) {
     if (!args || args.length === 0) {
-      await this.sendMessage(chatId, 'ℹ️ Usage: `/status <item_id>` (e.g. `/status item_1790664000000`)', { parse_mode: 'Markdown' });
+      await this.sendMessage(chatId, 'ℹ️ Usage: `/status <item_id>` (e.g. `/status item_1790677293507`)', { parse_mode: 'Markdown' });
       return;
     }
 
     const query = args[0].trim();
     try {
-      const item = db.prepare(`
-        SELECT id, title, type, category, status, building, floor, closed_at, closed_by
-        FROM items
-        WHERE id = ? OR title LIKE ?
-        LIMIT 1
-      `).get(query, `%${query}%`);
+      let item = null;
+
+      if (db.pool) {
+        try {
+          const res = await db.pool.query(`
+            SELECT id, title, type, category, status, building, floor, closed_at, closed_by
+            FROM items
+            WHERE id = $1 OR title ILIKE $2
+            LIMIT 1
+          `, [query, `%${query}%`]);
+          if (res.rows && res.rows.length > 0) item = res.rows[0];
+        } catch (e) {}
+      }
+
+      if (!item) {
+        try {
+          item = db.prepare(`
+            SELECT id, title, type, category, status, building, floor, closed_at, closed_by
+            FROM items
+            WHERE id = ? OR title LIKE ?
+            LIMIT 1
+          `).get(query, `%${query}%`);
+        } catch (e) {}
+      }
 
       if (!item) {
         await this.sendMessage(chatId, `⚠️ No item found matching "${query}". Please check the ID or title.`);
@@ -629,7 +743,7 @@ Join our community group for visual photo summaries and campus alerts:
 • *Closed At:* ${item.closed_at ? new Date(item.closed_at).toLocaleString() : 'Recently'}
 • *Verified By:* ${item.closed_by || 'Campus Verification Officer'}`;
       } else {
-        text += `\n🔍 Search is actively ongoing in Findora Campus Network.`;
+        text += `\n🔍 Search is actively ongoing in Findora Campus Network.\n🌐 Portal: https://findoravsbec.vercel.app`;
       }
 
       await this.sendMessage(chatId, text, { parse_mode: 'Markdown' });
@@ -643,17 +757,26 @@ Join our community group for visual photo summaries and campus alerts:
    */
   async handleCodeCommand(chatId, args) {
     if (!args || args.length === 0) {
-      await this.sendMessage(chatId, '🔑 Usage: `/code <item_id>` (e.g. `/code item_1790664000000`)', { parse_mode: 'Markdown' });
+      await this.sendMessage(chatId, '🔑 Usage: `/code <item_id>` (e.g. `/code item_1790677293507`)', { parse_mode: 'Markdown' });
       return;
     }
 
     const itemId = args[0].trim();
     try {
-      const item = db.prepare(`
-        SELECT id, title, type, status, close_code
-        FROM items
-        WHERE id = ?
-      `).get(itemId);
+      let item = null;
+
+      if (db.pool) {
+        try {
+          const res = await db.pool.query('SELECT id, title, type, status, close_code FROM items WHERE id = $1', [itemId]);
+          if (res.rows && res.rows.length > 0) item = res.rows[0];
+        } catch (e) {}
+      }
+
+      if (!item) {
+        try {
+          item = db.prepare('SELECT id, title, type, status, close_code FROM items WHERE id = ?').get(itemId);
+        } catch (e) {}
+      }
 
       if (!item) {
         await this.sendMessage(chatId, `⚠️ Item with ID \`${itemId}\` not found.`, { parse_mode: 'Markdown' });
@@ -688,12 +811,20 @@ The officer will enter this code to verify custody and officially close the sear
    */
   async handleMyReportsCommand(chatId, fromUser) {
     try {
-      const items = db.prepare(`
-        SELECT id, title, type, category, status, building, floor, close_code, created_at
-        FROM items
-        ORDER BY created_at DESC
-        LIMIT 5
-      `).all();
+      let items = [];
+
+      if (db.pool) {
+        try {
+          const res = await db.pool.query('SELECT id, title, type, category, status, building, floor, close_code, created_at FROM items ORDER BY created_at DESC LIMIT 5');
+          items = res.rows || [];
+        } catch (e) {}
+      }
+
+      if (items.length === 0) {
+        try {
+          items = db.prepare('SELECT id, title, type, category, status, building, floor, close_code, created_at FROM items ORDER BY created_at DESC LIMIT 5').all() || [];
+        } catch (e) {}
+      }
 
       if (!items || items.length === 0) {
         await this.sendMessage(chatId, '📝 You currently have no reports registered in Findora.');
@@ -728,15 +859,29 @@ The officer will enter this code to verify custody and officially close the sear
     const code = args[0].trim().toUpperCase();
 
     try {
-      const item = db.prepare(`
-        SELECT * FROM items
-        WHERE UPPER(close_code) = ?
-      `).get(code);
+      let item = null;
+      let recoveryCase = null;
 
-      const recoveryCase = !item ? db.prepare(`
-        SELECT * FROM recovery_cases
-        WHERE UPPER(handover_code) = ?
-      `).get(code) : null;
+      if (db.pool) {
+        try {
+          const itemRes = await db.pool.query('SELECT * FROM items WHERE UPPER(close_code) = $1', [code]);
+          if (itemRes.rows && itemRes.rows.length > 0) {
+            item = itemRes.rows[0];
+          } else {
+            const recRes = await db.pool.query('SELECT * FROM recovery_cases WHERE UPPER(handover_code) = $1', [code]);
+            if (recRes.rows && recRes.rows.length > 0) recoveryCase = recRes.rows[0];
+          }
+        } catch (e) {}
+      }
+
+      if (!item && !recoveryCase) {
+        try {
+          item = db.prepare('SELECT * FROM items WHERE UPPER(close_code) = ?').get(code);
+          if (!item) {
+            recoveryCase = db.prepare('SELECT * FROM recovery_cases WHERE UPPER(handover_code) = ?').get(code);
+          }
+        } catch (e) {}
+      }
 
       if (!item && !recoveryCase) {
         await this.sendMessage(chatId, `❌ *Invalid 1-Time Code: \`${code}\`*\n\nNo active item or recovery case matches this code. Custody transfer rejected.`, { parse_mode: 'Markdown' });
@@ -744,7 +889,17 @@ The officer will enter this code to verify custody and officially close the sear
       }
 
       const targetItemId = item ? item.id : recoveryCase.item_id;
-      const targetItem = item || db.prepare('SELECT * FROM items WHERE id = ?').get(targetItemId);
+      let targetItem = item;
+
+      if (!targetItem && db.pool) {
+        try {
+          const tRes = await db.pool.query('SELECT * FROM items WHERE id = $1', [targetItemId]);
+          if (tRes.rows && tRes.rows.length > 0) targetItem = tRes.rows[0];
+        } catch (e) {}
+      }
+      if (!targetItem) {
+        targetItem = db.prepare('SELECT * FROM items WHERE id = ?').get(targetItemId);
+      }
 
       if (targetItem.status === 'RECOVERED' || targetItem.status === 'CLOSED') {
         await this.sendMessage(chatId, `⚠️ Search for *${targetItem.title}* has already been closed and recovered.`, { parse_mode: 'Markdown' });
@@ -754,32 +909,22 @@ The officer will enter this code to verify custody and officially close the sear
       const now = new Date().toISOString();
       const officerTag = `Telegram Officer @${username}`;
 
-      // Update item status
-      db.prepare(`
-        UPDATE items
-        SET status = 'RECOVERED', closed_at = ?, closed_by = ?
-        WHERE id = ?
-      `).run(now, officerTag, targetItemId);
-
-      // Also close any linked recovery case
-      if (recoveryCase || targetItemId) {
-        db.prepare(`
-          UPDATE recovery_cases
-          SET status = 'RECOVERED', recovered_at = ?
-          WHERE item_id = ?
-        `).run(now, targetItemId);
+      // Update item status in Supabase & Local Cache
+      if (db.pool) {
+        try {
+          await db.pool.query("UPDATE items SET status = 'RECOVERED', closed_at = $1, closed_by = $2 WHERE id = $3", [now, officerTag, targetItemId]);
+          await db.pool.query("UPDATE recovery_cases SET status = 'RECOVERED', recovered_at = $1 WHERE item_id = $2", [now, targetItemId]);
+          await db.pool.query(
+            'INSERT INTO audit_logs (id, user_id, action, target_type, target_id, details) VALUES ($1, $2, $3, $4, $5, $6)',
+            [`aud_${Date.now()}`, `tg_${chatId}`, 'SEARCH_CLOSED_BY_TELEGRAM_CODE', 'items', targetItemId, `1-Time Code ${code} verified by ${officerTag}. Search closed.`]
+          );
+        } catch (e) {}
       }
 
-      // Log audit
-      db.prepare(`
-        INSERT INTO audit_logs (id, user_id, action, target_type, target_id, details)
-        VALUES (?, ?, 'SEARCH_CLOSED_BY_TELEGRAM_CODE', 'items', ?, ?)
-      `).run(
-        `aud_${Date.now()}`,
-        `tg_${chatId}`,
-        targetItemId,
-        `1-Time Code ${code} verified by ${officerTag}. Search closed.`
-      );
+      try {
+        db.prepare("UPDATE items SET status = 'RECOVERED', closed_at = ?, closed_by = ? WHERE id = ?").run(now, officerTag, targetItemId);
+        db.prepare("UPDATE recovery_cases SET status = 'RECOVERED', recovered_at = ? WHERE item_id = ?").run(now, targetItemId);
+      } catch (e) {}
 
       // Send success response
       const successText = 
@@ -799,7 +944,7 @@ The search for this item is officially marked as *RECOVERED* in Findora Registry
       // Broadcast resolution to all subscribers and campus groups
       this.broadcastSearchClosed(targetItem, officerTag, code);
     } catch (e) {
-      await this.sendMessage(chatId, `❌ Error processing verification: ${e.message}`);
+      await this.sendMessage(chatId, `❌ Error verifying handover code: ${e.message}`);
     }
   }
 
@@ -813,7 +958,7 @@ The search for this item is officially marked as *RECOVERED* in Findora Registry
 Findora strictly requires a **Live WebRTC Camera Photo with GPS Location Tag** to ensure authentic campus reports.
 
 1. Open the Findora Web Portal:
-🌐 http://localhost:3000
+🌐 https://findoravsbec.vercel.app
 
 2. Click on **"Report Item"** in the sidebar.
 3. Select **"I Lost Something"** or **"I Found Something"**.
