@@ -9,42 +9,52 @@ const { rankCandidates } = require('../services/matching');
 const { generateHandoverCode } = require('../services/recovery');
 const telegramBot = require('../services/telegramBot');
 const { sendReportConfirmationEmail, sendSearchClosedEmail } = require('../services/email');
+const { uploadToCloudinary, isCloudinaryConfigured } = require('../services/storage');
 
-// Multer storage configuration
-const uploadsDir = path.resolve(__dirname, '..', '..', 'uploads');
-if (!fs.existsSync(uploadsDir)) {
-  fs.mkdirSync(uploadsDir, { recursive: true });
-}
-
-const storage = multer.diskStorage({
-  destination: (req, file, cb) => cb(null, uploadsDir),
-  filename: (req, file, cb) => {
-    const ext = path.extname(file.originalname) || '.jpg';
-    cb(null, `item_${Date.now()}_${Math.round(Math.random() * 1e4)}${ext}`);
-  }
-});
+// Use memory storage so uploads work on Vercel (no persistent disk)
 const upload = multer({
-  storage,
+  storage: multer.memoryStorage(),
   limits: { fileSize: 10 * 1024 * 1024 } // 10MB
 });
 
-const { uploadToCloudinary } = require('../services/storage');
+// Disk-based uploads directory (local dev fallback only)
+const uploadsDir = path.resolve(__dirname, '..', '..', 'uploads');
+if (!fs.existsSync(uploadsDir) && !process.env.VERCEL) {
+  try { fs.mkdirSync(uploadsDir, { recursive: true }); } catch (e) {}
+}
 
 // Upload image endpoint
 router.post('/upload', upload.single('image'), async (req, res) => {
   if (!req.file) {
     return res.status(400).json({ error: 'No image file uploaded' });
   }
-  let finalUrl = `/uploads/${req.file.filename}`;
+
+  // Try Cloudinary first (uses in-memory buffer → works on Vercel)
   try {
-    const cloudUrl = await uploadToCloudinary(req.file.path);
+    const cloudUrl = await uploadToCloudinary(req.file.buffer, {
+      public_id: `item_${Date.now()}_${Math.round(Math.random() * 1e4)}`
+    });
     if (cloudUrl) {
-      finalUrl = cloudUrl;
+      return res.json({ imageUrl: cloudUrl, source: 'cloudinary' });
     }
   } catch (err) {
-    console.warn('Cloudinary upload fallback to local:', err.message);
+    console.warn('[UPLOAD] Cloudinary failed, trying local fallback:', err.message);
   }
-  res.json({ imageUrl: finalUrl });
+
+  // Local disk fallback (only works when NOT on Vercel)
+  if (!process.env.VERCEL) {
+    try {
+      if (!fs.existsSync(uploadsDir)) fs.mkdirSync(uploadsDir, { recursive: true });
+      const ext = path.extname(req.file.originalname) || '.jpg';
+      const filename = `item_${Date.now()}_${Math.round(Math.random() * 1e4)}${ext}`;
+      fs.writeFileSync(path.join(uploadsDir, filename), req.file.buffer);
+      return res.json({ imageUrl: `/uploads/${filename}`, source: 'local' });
+    } catch (localErr) {
+      console.warn('[UPLOAD] Local save also failed:', localErr.message);
+    }
+  }
+
+  res.status(500).json({ error: 'Image upload failed. Cloudinary not configured or unavailable.' });
 });
 
 // List Public Items (Security rule: Never leak private attributes!)
