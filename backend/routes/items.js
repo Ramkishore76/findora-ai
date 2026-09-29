@@ -176,6 +176,24 @@ router.post('/lost', authenticateToken, (req, res) => {
       closeCode
     );
 
+    if (db.pool) {
+      db.pool.query(`
+        INSERT INTO items (
+          id, type, title, description, category, color, brand, model,
+          image, location, building, floor, event_time, owner_id, status,
+          serial_number, unique_marks, damage_details, hidden_features,
+          latitude, longitude, close_code
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22)
+        ON CONFLICT (id) DO UPDATE SET status = EXCLUDED.status, close_code = EXCLUDED.close_code
+      `, [
+        itemId, 'LOST', title, description, category, color || null, brand || null, model || null,
+        image || null, location || `${building} Floor ${floor || 1}`, building, floor ? parseInt(floor) : 1,
+        event_time ? new Date(event_time) : new Date(), ownerId, 'OPEN',
+        serial_number || null, unique_marks || null, damage_details || null, hidden_features || null,
+        latitude ? parseFloat(latitude) : null, longitude ? parseFloat(longitude) : null, closeCode
+      ]).catch(e => console.warn('[SUPABASE LOST ITEM ERROR]:', e.message));
+    }
+
     // Save private ownership clues table for backwards compatibility
     const privId = `priv_${itemId}`;
     try {
@@ -317,6 +335,24 @@ router.post('/found', authenticateToken, (req, res) => {
       longitude ? parseFloat(longitude) : null,
       closeCode
     );
+
+    if (db.pool) {
+      db.pool.query(`
+        INSERT INTO items (
+          id, type, title, description, category, color, brand, model,
+          image, location, building, floor, event_time, owner_id, status,
+          condition, unique_marks, damage_details, hidden_features,
+          latitude, longitude, close_code
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22)
+        ON CONFLICT (id) DO UPDATE SET status = EXCLUDED.status, close_code = EXCLUDED.close_code
+      `, [
+        itemId, 'FOUND', title, description, category, color || null, brand || null, model || null,
+        image || null, location || `${building} Floor ${floor || 1}`, building, floor ? parseInt(floor) : 1,
+        event_time ? new Date(event_time) : new Date(), ownerId, 'OPEN',
+        condition || 'Operational', unique_marks || null, damage_details || null, hidden_features || null,
+        latitude ? parseFloat(latitude) : null, longitude ? parseFloat(longitude) : null, closeCode
+      ]).catch(e => console.warn('[SUPABASE FOUND ITEM ERROR]:', e.message));
+    }
 
     // Save private observations table for backwards compatibility
     const privId = `priv_${itemId}`;

@@ -48,6 +48,13 @@ router.post('/register', async (req, res) => {
       VALUES (?, ?, ?, ?, ?)
     `).run(id, name.trim(), normalizedEmail, passwordHash, assignedRole);
 
+    if (db.pool) {
+      db.pool.query(
+        'INSERT INTO users (id, name, email, password_hash, role) VALUES ($1, $2, $3, $4, $5) ON CONFLICT (email) DO NOTHING',
+        [id, name.trim(), normalizedEmail, passwordHash, assignedRole]
+      ).catch(e => console.warn('[SUPABASE USER INSERT ERROR]:', e.message));
+    }
+
     const token = jwt.sign(
       { id, name: name.trim(), email: normalizedEmail, role: assignedRole },
       JWT_SECRET,
@@ -69,7 +76,7 @@ router.post('/register', async (req, res) => {
 });
 
 // 2. User Login
-router.post('/login', (req, res) => {
+router.post('/login', async (req, res) => {
   try {
     const { email, password } = req.body;
     if (!email || !password) {
@@ -77,7 +84,23 @@ router.post('/login', (req, res) => {
     }
 
     const normalizedEmail = email.trim().toLowerCase();
-    const user = db.prepare('SELECT * FROM users WHERE LOWER(email) = ?').get(normalizedEmail);
+    let user = db.prepare('SELECT * FROM users WHERE LOWER(email) = ?').get(normalizedEmail);
+    
+    // Direct Supabase fallback query if not in local cache
+    if (!user && db.pool) {
+      try {
+        const pgRes = await db.pool.query('SELECT * FROM users WHERE LOWER(email) = $1', [normalizedEmail]);
+        if (pgRes.rows && pgRes.rows.length > 0) {
+          user = pgRes.rows[0];
+          // cache locally
+          db.prepare('INSERT OR REPLACE INTO users (id, name, email, password_hash, role, avatar) VALUES (?, ?, ?, ?, ?, ?)')
+            .run(user.id, user.name, user.email, user.password_hash, user.role, user.avatar);
+        }
+      } catch (pgErr) {
+        console.warn('[SUPABASE LOGIN QUERY ERROR]:', pgErr.message);
+      }
+    }
+
     if (!user) {
       return res.status(401).json({ error: 'Invalid email address or password.' });
     }
