@@ -262,7 +262,7 @@ export default function LiveCameraCapture({
     let finalImageUrl = '';
     try {
       const uploadRes = await api.uploadImage(liveFile);
-      finalImageUrl = uploadRes.url || URL.createObjectURL(blob);
+      finalImageUrl = uploadRes.imageUrl || uploadRes.url || URL.createObjectURL(blob);
     } catch (uploadErr) {
       console.warn('Upload fallback to blob URL:', uploadErr.message);
       finalImageUrl = URL.createObjectURL(blob);

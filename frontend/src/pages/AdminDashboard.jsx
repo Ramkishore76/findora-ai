@@ -198,6 +198,7 @@ export default function AdminDashboard({ onInspectMatch, onViewRecoveryCase }) {
         <StatCard title="AI MATCHES" value={stats.aiMatches} icon={<Sparkles className="w-5 h-5" />} color="indigo" />
         <StatCard title="PENDING CLAIMS" value={stats.pendingClaims} icon={<Clock className="w-5 h-5" />} color="amber" />
         <StatCard title="RECOVERED" value={stats.recovered} icon={<CheckCircle2 className="w-5 h-5" />} color="emerald" />
+        <StatCard title="RECOVERY RATE" value={`${stats.recoveryRate}%`} icon={<TrendingUp className="w-5 h-5" />} color="purple" />
       </div>
 
       {/* 1-Time Code Custody & Search Closure Card (Verification Officer Action) */}

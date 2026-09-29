@@ -78,6 +78,13 @@ router.post('/:caseId/handover', authenticateToken, requireOfficerOrAdmin, (req,
       WHERE id = ?
     `).run(now, JSON.stringify(updatedTimeline), caseId);
 
+    if (db.pool) {
+      db.pool.query(
+        'UPDATE recovery_cases SET status = $1, recovered_at = $2, timeline = $3 WHERE id = $4',
+        ['RECOVERED', new Date(now), JSON.stringify(updatedTimeline), caseId]
+      ).catch(e => console.warn('[SUPABASE CASE RECOVERED ERROR]:', e.message));
+    }
+
     // Mark item as RECOVERED
     db.prepare("UPDATE items SET status = 'RECOVERED' WHERE id = ?").run(recoveryCase.item_id);
 
@@ -87,16 +94,27 @@ router.post('/:caseId/handover', authenticateToken, requireOfficerOrAdmin, (req,
       db.prepare("UPDATE items SET status = 'RECOVERED' WHERE id = ?").run(claim.lost_item_id);
     }
 
+    if (db.pool) {
+      db.pool.query(
+        'UPDATE items SET status = $1 WHERE id = $2 OR id = $3',
+        ['RECOVERED', recoveryCase.item_id, (claim && claim.lost_item_id) || recoveryCase.item_id]
+      ).catch(e => console.warn('[SUPABASE ITEM STATUS ERROR]:', e.message));
+    }
+
     // Audit log
+    const audId = `aud_${Date.now()}`;
+    const audDetail = `Handover code ${recoveryCase.handover_code} successfully verified. Custody transfer completed.`;
     db.prepare(`
       INSERT INTO audit_logs (id, user_id, action, target_type, target_id, details)
       VALUES (?, ?, 'HANDOVER_COMPLETED', 'recovery_cases', ?, ?)
-    `).run(
-      `aud_${Date.now()}`,
-      officerId,
-      caseId,
-      `Handover code ${recoveryCase.handover_code} successfully verified. Custody transfer completed.`
-    );
+    `).run(audId, officerId, caseId, audDetail);
+
+    if (db.pool) {
+      db.pool.query(
+        'INSERT INTO audit_logs (id, user_id, action, target_type, target_id, details) VALUES ($1, $2, $3, $4, $5, $6)',
+        [audId, officerId, 'HANDOVER_COMPLETED', 'recovery_cases', caseId, audDetail]
+      ).catch(e => console.warn('[SUPABASE AUDIT LOG ERROR]:', e.message));
+    }
 
     res.json({
       message: 'Item custody successfully transferred. Recovery case closed.',

@@ -35,7 +35,7 @@ router.post('/upload', upload.single('image'), async (req, res) => {
       public_id: `item_${Date.now()}_${Math.round(Math.random() * 1e4)}`
     });
     if (cloudUrl) {
-      return res.json({ imageUrl: cloudUrl, source: 'cloudinary' });
+      return res.json({ imageUrl: cloudUrl, url: cloudUrl, source: 'cloudinary' });
     }
   } catch (err) {
     console.warn('[UPLOAD] Cloudinary failed, trying local fallback:', err.message);
@@ -267,16 +267,38 @@ router.post('/lost', authenticateToken, (req, res) => {
         JSON.stringify(topMatch.explanation)
       );
 
+      if (db.pool) {
+        db.pool.query(`
+          INSERT INTO matches (
+            id, lost_item_id, found_item_id, final_score, visual_score,
+            text_score, location_score, time_score, category_score,
+            attribute_score, explanation, status
+          ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, 'PENDING')
+          ON CONFLICT (id) DO NOTHING
+        `, [
+          matchId, topMatch.lost_item_id, topMatch.found_item_id, topMatch.final_score,
+          topMatch.visual_score, topMatch.text_score, topMatch.location_score,
+          topMatch.time_score, topMatch.category_score, topMatch.attribute_score,
+          JSON.stringify(topMatch.explanation)
+        ]).catch(e => console.warn('[SUPABASE MATCH INSERT ERROR]:', e.message));
+      }
+
       // Create instant Smart Recovery notification
+      const notifId = `notif_${Date.now()}`;
+      const notifMsg = `Potential match discovered with ${Math.round(topMatch.final_score * 100)}% confidence for your ${title}.`;
+      const notifData = JSON.stringify({ match_id: matchId, item_id: itemId });
+
       db.prepare(`
         INSERT INTO notifications (id, user_id, title, message, type, data)
         VALUES (?, ?, 'AI Match Discovered', ?, 'MATCH_ALERT', ?)
-      `).run(
-        `notif_${Date.now()}`,
-        ownerId,
-        `Potential match discovered with ${Math.round(topMatch.final_score * 100)}% confidence for your ${title}.`,
-        JSON.stringify({ match_id: matchId, item_id: itemId })
-      );
+      `).run(notifId, ownerId, notifMsg, notifData);
+
+      if (db.pool) {
+        db.pool.query(
+          'INSERT INTO notifications (id, user_id, title, message, type, data) VALUES ($1, $2, $3, $4, $5, $6)',
+          [notifId, ownerId, 'AI Match Discovered', notifMsg, 'MATCH_ALERT', notifData]
+        ).catch(e => console.warn('[SUPABASE NOTIF INSERT ERROR]:', e.message));
+      }
 
       // Broadcast AI Match alert to Telegram Bot subscribers
       const matchedFoundItem = db.prepare('SELECT * FROM items WHERE id = ?').get(topMatch.found_item_id);
@@ -418,18 +440,40 @@ router.post('/found', authenticateToken, (req, res) => {
         JSON.stringify(topMatch.explanation)
       );
 
+      if (db.pool) {
+        db.pool.query(`
+          INSERT INTO matches (
+            id, lost_item_id, found_item_id, final_score, visual_score,
+            text_score, location_score, time_score, category_score,
+            attribute_score, explanation, status
+          ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, 'PENDING')
+          ON CONFLICT (id) DO NOTHING
+        `, [
+          matchId, topMatch.lost_item_id, topMatch.found_item_id, topMatch.final_score,
+          topMatch.visual_score, topMatch.text_score, topMatch.location_score,
+          topMatch.time_score, topMatch.category_score, topMatch.attribute_score,
+          JSON.stringify(topMatch.explanation)
+        ]).catch(e => console.warn('[SUPABASE FOUND MATCH INSERT ERROR]:', e.message));
+      }
+
       // Notify owner of lost item
       const lostItem = db.prepare('SELECT owner_id, title FROM items WHERE id = ?').get(topMatch.lost_item_id);
       if (lostItem) {
+        const notifId = `notif_${Date.now()}`;
+        const notifMsg = `A found item matching your ${lostItem.title} was just reported with ${Math.round(topMatch.final_score * 100)}% match confidence.`;
+        const notifData = JSON.stringify({ match_id: matchId, item_id: topMatch.lost_item_id });
+
         db.prepare(`
           INSERT INTO notifications (id, user_id, title, message, type, data)
           VALUES (?, ?, 'Potential Match Found!', ?, 'MATCH_ALERT', ?)
-        `).run(
-          `notif_${Date.now()}`,
-          lostItem.owner_id,
-          `A found item matching your ${lostItem.title} was just reported with ${Math.round(topMatch.final_score * 100)}% match confidence.`,
-          JSON.stringify({ match_id: matchId, item_id: topMatch.lost_item_id })
-        );
+        `).run(notifId, lostItem.owner_id, notifMsg, notifData);
+
+        if (db.pool) {
+          db.pool.query(
+            'INSERT INTO notifications (id, user_id, title, message, type, data) VALUES ($1, $2, $3, $4, $5, $6)',
+            [notifId, lostItem.owner_id, 'Potential Match Found!', notifMsg, 'MATCH_ALERT', notifData]
+          ).catch(e => console.warn('[SUPABASE NOTIF INSERT ERROR]:', e.message));
+        }
 
         // Broadcast AI Match alert to Telegram Bot subscribers
         const matchedLostItem = db.prepare('SELECT * FROM items WHERE id = ?').get(topMatch.lost_item_id);
@@ -495,12 +539,26 @@ router.post('/close-search', authenticateToken, requireOfficerOrAdmin, async (re
       WHERE id = ?
     `).run(now, officerName, item.id);
 
+    if (db.pool) {
+      db.pool.query(
+        'UPDATE items SET status = $1, closed_at = $2, closed_by = $3 WHERE id = $4',
+        ['RECOVERED', new Date(now), officerName, item.id]
+      ).catch(e => console.warn('[SUPABASE ITEM RECOVERED ERROR]:', e.message));
+    }
+
     // If item was linked to a recovery case, mark it RECOVERED as well
     db.prepare(`
       UPDATE recovery_cases
       SET status = 'RECOVERED', recovered_at = ?
       WHERE item_id = ?
     `).run(now, item.id);
+
+    if (db.pool) {
+      db.pool.query(
+        'UPDATE recovery_cases SET status = $1, recovered_at = $2 WHERE item_id = $3',
+        ['RECOVERED', new Date(now), item.id]
+      ).catch(e => console.warn('[SUPABASE CASE RECOVERED ERROR]:', e.message));
+    }
 
     // Mark any related claims
     db.prepare(`
@@ -509,16 +567,27 @@ router.post('/close-search', authenticateToken, requireOfficerOrAdmin, async (re
       WHERE lost_item_id = ? OR found_item_id = ?
     `).run(item.id, item.id);
 
+    if (db.pool) {
+      db.pool.query(
+        'UPDATE claims SET status = $1 WHERE lost_item_id = $2 OR found_item_id = $2',
+        ['APPROVED', item.id]
+      ).catch(e => console.warn('[SUPABASE CLAIMS APPROVE ERROR]:', e.message));
+    }
+
     // Audit log
+    const audId = `aud_${Date.now()}`;
+    const audDetail = `1-Time Code ${code} verified by ${officerName}. Custody transferred and search closed.`;
     db.prepare(`
       INSERT INTO audit_logs (id, user_id, action, target_type, target_id, details)
       VALUES (?, ?, 'SEARCH_CLOSED_BY_CODE', 'items', ?, ?)
-    `).run(
-      `aud_${Date.now()}`,
-      officerId,
-      item.id,
-      `1-Time Code ${code} verified by ${officerName}. Custody transferred and search closed.`
-    );
+    `).run(audId, officerId, item.id, audDetail);
+
+    if (db.pool) {
+      db.pool.query(
+        'INSERT INTO audit_logs (id, user_id, action, target_type, target_id, details) VALUES ($1, $2, $3, $4, $5, $6)',
+        [audId, officerId, 'SEARCH_CLOSED_BY_CODE', 'items', item.id, audDetail]
+      ).catch(e => console.warn('[SUPABASE AUDIT LOG ERROR]:', e.message));
+    }
 
     // Notify owner via email
     const owner = db.prepare('SELECT email FROM users WHERE id = ?').get(item.owner_id);

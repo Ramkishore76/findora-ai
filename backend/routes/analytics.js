@@ -122,13 +122,14 @@ router.get('/', (req, res) => {
       SELECT building, COUNT(*) as c FROM items GROUP BY building ORDER BY c DESC LIMIT 1
     `).get();
 
-    const totalRecoveries = db.prepare("SELECT COUNT(*) as count FROM recovery_cases WHERE status = 'RECOVERED'").get().count;
+    const totalRecoveries = db.prepare("SELECT COUNT(*) as count FROM items WHERE status = 'RECOVERED'").get().count;
     const overallRecoveryRate = totalItems > 0 ? Math.round((totalRecoveries / totalItems) * 100) : 0;
 
     const totalLost = db.prepare("SELECT COUNT(*) as count FROM items WHERE type = 'LOST'").get().count;
     const totalFound = db.prepare("SELECT COUNT(*) as count FROM items WHERE type = 'FOUND'").get().count;
     const totalMatches = db.prepare("SELECT COUNT(*) as count FROM matches WHERE status != 'DISMISSED'").get().count;
     const pendingClaims = db.prepare("SELECT COUNT(*) as count FROM claims WHERE status IN ('PENDING_VERIFICATION', 'UNDER_REVIEW')").get().count;
+    const activeRiskAlerts = db.prepare("SELECT COUNT(*) as count FROM fraud_alerts WHERE status = 'ACTIVE'").get().count;
 
     res.json({
       stats: {
@@ -137,6 +138,7 @@ router.get('/', (req, res) => {
         aiMatches: totalMatches,
         pendingClaims,
         recovered: totalRecoveries,
+        activeRiskAlerts,
         recoveryRate: overallRecoveryRate
       },
       summary: {

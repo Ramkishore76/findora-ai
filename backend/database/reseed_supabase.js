@@ -69,7 +69,7 @@ async function seedItems() {
       title:'Blue Dell Laptop',
       description:'Dell Inspiron 15 3000 series, blue lid with a small crack on top-right corner. Has a VSB CSE sticker on the palm rest.',
       category:'Electronics', color:'Blue', brand:'Dell', model:'Inspiron 15 3000',
-      image:'https://upload.wikimedia.org/wikipedia/commons/thumb/1/1e/Dell_Laptop.jpg/320px-Dell_Laptop.jpg',
+      image:'https://res.cloudinary.com/dalevih1d/image/upload/v1790675986/findora_items/blue_dell_laptop_1790675984991.jpg',
       location:'Block A – Computer Lab', building:'Block A', floor:2,
       event_time: d1, owner_id:'usr_santhosh_k',
       serial_number:'SN-DL-7834XC', unique_marks:'VSB CSE sticker, crack on lid',
@@ -81,7 +81,7 @@ async function seedItems() {
       title:'Black JBL Earbuds Case',
       description:'JBL Tune 230NC TWS charging case, black. Found near library entrance bench. Earbuds are inside.',
       category:'Electronics', color:'Black', brand:'JBL', model:'Tune 230NC TWS',
-      image:'https://upload.wikimedia.org/wikipedia/commons/thumb/1/1b/No_image.svg/320px-No_image.svg.png',
+      image:'https://res.cloudinary.com/dalevih1d/image/upload/v1790675988/findora_items/jbl_earbuds_case_1790675987819.jpg',
       location:'Library – Entrance Bench', building:'Library Block', floor:1,
       event_time: d2, owner_id:'usr_priya_m',
       serial_number: null, unique_marks:'Small scratch on lid',
@@ -93,7 +93,7 @@ async function seedItems() {
       title:'Maroon College ID Card',
       description:'VSB Engineering College student ID. Name: Santhosh Kumar, Roll No: 22CSA045. Lost near the canteen.',
       category:'Documents', color:'Maroon', brand: null, model: null,
-      image:'https://upload.wikimedia.org/wikipedia/commons/thumb/1/1b/No_image.svg/320px-No_image.svg.png',
+      image:'https://res.cloudinary.com/dalevih1d/image/upload/v1790675989/findora_items/college_id_card_1790675988876.jpg',
       location:'Canteen – Near Counter 3', building:'Canteen Block', floor:1,
       event_time: d3, owner_id:'usr_santhosh_k',
       serial_number:'22CSA045', unique_marks:'Photo ID, blood group O+',
@@ -105,7 +105,7 @@ async function seedItems() {
       title:'Grey HP Laptop Bag',
       description:'HP branded grey laptop backpack found in Seminar Hall after the cloud computing workshop. No laptop inside.',
       category:'Bags', color:'Grey', brand:'HP', model:'Active Backpack 15.6"',
-      image:'https://upload.wikimedia.org/wikipedia/commons/thumb/1/1b/No_image.svg/320px-No_image.svg.png',
+      image:'https://res.cloudinary.com/dalevih1d/image/upload/v1790675990/findora_items/hp_laptop_backpack_1790675990046.jpg',
       location:'Seminar Hall – Row 4', building:'Block B', floor:3,
       event_time: d2, owner_id:'usr_tharun_k',
       serial_number: null, unique_marks:'HP logo, grey mesh front pocket',
@@ -127,7 +127,7 @@ async function seedItems() {
         $15,$16,$17,$18,$19,
         $20,$21,$22,$23,$24
       )
-      ON CONFLICT (id) DO UPDATE SET status=EXCLUDED.status, closed_at=EXCLUDED.closed_at
+      ON CONFLICT (id) DO UPDATE SET status=EXCLUDED.status, closed_at=EXCLUDED.closed_at, image=EXCLUDED.image
     `, [
       item.id, item.type, item.title, item.description, item.category,
       item.color, item.brand, item.model,
@@ -175,6 +175,74 @@ async function seedMatches() {
     'PENDING', d3
   ]);
   log('AI match: item_lost_001 vs item_found_001 — 42% PENDING');
+}
+
+async function seedClaimsAndCases() {
+  console.log('\n Seeding claims, questions & recovery cases...');
+  // 1. Pending claim on JBL Earbuds
+  await q(`
+    INSERT INTO claims (
+      id, match_id, lost_item_id, found_item_id, claimant_id,
+      status, verification_score, risk_score, risk_level, created_at, updated_at
+    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+    ON CONFLICT (id) DO NOTHING
+  `, [
+    'claim_001', 'match_001', 'item_lost_001', 'item_found_001', 'usr_santhosh_k',
+    'PENDING_VERIFICATION', 0.68, 0.15, 'LOW', d3, d3
+  ]);
+
+  // Questions for claim_001
+  await q(`
+    INSERT INTO claim_questions (id, claim_id, found_item_id, question_key, prompt, created_at)
+    VALUES ($1, $2, $3, $4, $5, $6)
+    ON CONFLICT (id) DO NOTHING
+  `, ['q_001', 'claim_001', 'item_found_001', 'unique_marks', 'Describe any identifiable markings or scratches on the charging case.', d3]);
+
+  // 2. Approved & Recovered claim for HP Laptop Bag
+  await q(`
+    INSERT INTO claims (
+      id, match_id, lost_item_id, found_item_id, claimant_id,
+      status, verification_score, risk_score, risk_level, admin_notes, created_at, updated_at
+    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+    ON CONFLICT (id) DO NOTHING
+  `, [
+    'claim_002', null, null, 'item_found_002', 'usr_tharun_k',
+    'APPROVED', 0.95, 0.05, 'LOW', 'Verified in person by Officer Siva Kumar.', d2, d4
+  ]);
+
+  // Recovery Case for claim_002
+  const timeline = [
+    { step: 'CLAIM_SUBMITTED', completed: true, timestamp: d2.toISOString(), actor: 'Tharun Kumar' },
+    { step: 'OFFICER_APPROVED', completed: true, timestamp: d3.toISOString(), actor: 'Siva Kumar' },
+    { step: 'RECOVERED', completed: true, timestamp: d4.toISOString(), actor: 'Siva Kumar' },
+    { step: 'CLOSED', completed: true, timestamp: d4.toISOString(), actor: 'Findora Audit System' }
+  ];
+
+  await q(`
+    INSERT INTO recovery_cases (
+      id, claim_id, item_id, claimant_id, pickup_location,
+      handover_code, status, timeline, admin_id, created_at, recovered_at
+    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+    ON CONFLICT (id) DO NOTHING
+  `, [
+    'case_001', 'claim_002', 'item_found_002', 'usr_tharun_k',
+    'Seminar Hall Security Desk, Block B', 'FIND-RCV9', 'RECOVERED',
+    JSON.stringify(timeline), 'usr_siva_k', d2, d4
+  ]);
+
+  // Fraud Alert test entry (Audited & cleared)
+  await q(`
+    INSERT INTO fraud_alerts (
+      id, claim_id, claimant_id, risk_score, severity, alert_type, reasons, status, created_at
+    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+    ON CONFLICT (id) DO NOTHING
+  `, [
+    'fa_001', 'claim_001', 'usr_santhosh_k', 0.15, 'LOW', 'PROXIMITY_AUDIT',
+    JSON.stringify(['Reported within 24h of found item timestamp']), 'ACTIVE', d3
+  ]);
+
+  log('claim_001: PENDING_VERIFICATION (JBL Earbuds)');
+  log('claim_002: APPROVED & case_001: RECOVERED (HP Laptop Bag)');
 }
 
 async function seedNotifications() {
@@ -226,7 +294,7 @@ async function seedTelegram() {
 
 async function verifyAll() {
   console.log('\n Row counts after reseed:\n');
-  const tables = ['users','items','item_private_attributes','matches','notifications','audit_logs','telegram_subscribers'];
+  const tables = ['users','items','item_private_attributes','matches','claims','recovery_cases','fraud_alerts','notifications','audit_logs','telegram_subscribers'];
   for (const t of tables) {
     const res = await q(`SELECT COUNT(*) FROM ${t}`);
     console.log(`    ${t.padEnd(32)} ${res.rows[0].count} rows`);
@@ -244,12 +312,13 @@ async function verifyAll() {
     await seedItems();
     await seedPrivateAttributes();
     await seedMatches();
+    await seedClaimsAndCases();
     await seedNotifications();
     await seedAuditLogs();
     await seedTelegram();
     await verifyAll();
 
-    console.log('\nRESEED COMPLETE! All tables populated.\n');
+    console.log('\nRESEED COMPLETE! All tables populated with live Cloudinary and Supabase data.\n');
   } catch (err) {
     console.error('\nRESEED FAILED:', err.message);
     console.error(err.stack);

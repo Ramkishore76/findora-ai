@@ -12,7 +12,7 @@ router.get('/dashboard', authenticateToken, requireOfficerOrAdmin, (req, res) =>
     const totalFound = db.prepare("SELECT COUNT(*) as count FROM items WHERE type = 'FOUND'").get().count;
     const totalMatches = db.prepare("SELECT COUNT(*) as count FROM matches WHERE status != 'DISMISSED'").get().count;
     const pendingClaims = db.prepare("SELECT COUNT(*) as count FROM claims WHERE status IN ('PENDING_VERIFICATION', 'UNDER_REVIEW')").get().count;
-    const totalRecovered = db.prepare("SELECT COUNT(*) as count FROM recovery_cases WHERE status IN ('RECOVERED', 'CLOSED')").get().count;
+    const totalRecovered = db.prepare("SELECT COUNT(*) as count FROM items WHERE status = 'RECOVERED'").get().count;
     const activeRiskAlerts = db.prepare("SELECT COUNT(*) as count FROM fraud_alerts WHERE status = 'ACTIVE'").get().count;
 
     // Top Recent AI Matches
@@ -66,7 +66,8 @@ router.get('/dashboard', authenticateToken, requireOfficerOrAdmin, (req, res) =>
     });
 
     // Recovery Rate calculation
-    const recoveryRate = totalFound > 0 ? Math.round((totalRecovered / totalFound) * 100) : 0;
+    const totalItems = totalLost + totalFound;
+    const recoveryRate = totalItems > 0 ? Math.round((totalRecovered / totalItems) * 100) : 0;
 
     res.json({
       stats: {
@@ -141,22 +142,57 @@ router.post('/claims/:id/approve', authenticateToken, requireOfficerOrAdmin, (re
       WHERE id = ?
     `).run(adminNotes || 'Claim verified and authorized by campus administrator.', claimId);
 
+    if (db.pool) {
+      db.pool.query(
+        'UPDATE claims SET status = $1, admin_notes = $2, updated_at = CURRENT_TIMESTAMP WHERE id = $3',
+        ['APPROVED', adminNotes || 'Claim verified and authorized by campus administrator.', claimId]
+      ).catch(e => console.warn('[SUPABASE CLAIM APPROVE ERROR]:', e.message));
+    }
+
     // Update found item and lost item status
     db.prepare("UPDATE items SET status = 'CLAIMED' WHERE id = ?").run(claim.found_item_id);
     if (claim.lost_item_id) {
       db.prepare("UPDATE items SET status = 'CLAIMED' WHERE id = ?").run(claim.lost_item_id);
     }
 
+    if (db.pool) {
+      db.pool.query(
+        'UPDATE items SET status = $1 WHERE id = $2 OR id = $3',
+        ['CLAIMED', claim.found_item_id, claim.lost_item_id || claim.found_item_id]
+      ).catch(e => console.warn('[SUPABASE ITEM STATUS ERROR]:', e.message));
+    }
+
+    // Insert recovery case into Supabase if created
+    if (recoveryCase && db.pool) {
+      db.pool.query(`
+        INSERT INTO recovery_cases (
+          id, claim_id, item_id, claimant_id, pickup_location,
+          handover_code, status, timeline, admin_id
+        ) VALUES ($1, $2, $3, $4, $5, $6, 'HANDOVER_PENDING', $7, $8)
+        ON CONFLICT (id) DO NOTHING
+      `, [
+        recoveryCase.id, claimId, claim.found_item_id, claim.claimant_id,
+        recoveryCase.pickup_location, recoveryCase.handover_code,
+        JSON.stringify(recoveryCase.timeline), adminId
+      ]).catch(e => console.warn('[SUPABASE CASE INSERT ERROR]:', e.message));
+    }
+
     // Notify claimant in-app
+    const notifId = `notif_${Date.now()}`;
+    const notifMsg = `Your claim has been authorized! Handover code: ${recoveryCase.handover_code}. Proceed to pickup.`;
+    const notifData = JSON.stringify({ case_id: recoveryCase.id, handover_code: recoveryCase.handover_code });
+
     db.prepare(`
       INSERT INTO notifications (id, user_id, title, message, type, data)
       VALUES (?, ?, 'Recovery Case Authorized!', ?, 'HANDOVER_READY', ?)
-    `).run(
-      `notif_${Date.now()}`,
-      claim.claimant_id,
-      `Your claim has been authorized! Handover code: ${recoveryCase.handover_code}. Proceed to pickup.`,
-      JSON.stringify({ case_id: recoveryCase.id, handover_code: recoveryCase.handover_code })
-    );
+    `).run(notifId, claim.claimant_id, notifMsg, notifData);
+
+    if (db.pool) {
+      db.pool.query(
+        'INSERT INTO notifications (id, user_id, title, message, type, data) VALUES ($1, $2, $3, $4, $5, $6)',
+        [notifId, claim.claimant_id, 'Recovery Case Authorized!', notifMsg, 'HANDOVER_READY', notifData]
+      ).catch(e => console.warn('[SUPABASE NOTIF ERROR]:', e.message));
+    }
 
     // Send real Brevo SMTP Email notification to claimant
     try {
@@ -172,15 +208,19 @@ router.post('/claims/:id/approve', authenticateToken, requireOfficerOrAdmin, (re
     }
 
     // Audit log
+    const audId = `aud_${Date.now()}`;
+    const audDetail = `Approved claim #${claimId}. Generated Recovery Case ${recoveryCase.id} with Handover Code ${recoveryCase.handover_code}`;
     db.prepare(`
       INSERT INTO audit_logs (id, user_id, action, target_type, target_id, details)
       VALUES (?, ?, 'APPROVE_CLAIM', 'claims', ?, ?)
-    `).run(
-      `aud_${Date.now()}`,
-      adminId,
-      claimId,
-      `Approved claim #${claimId}. Generated Recovery Case ${recoveryCase.id} with Handover Code ${recoveryCase.handover_code}`
-    );
+    `).run(audId, adminId, claimId, audDetail);
+
+    if (db.pool) {
+      db.pool.query(
+        'INSERT INTO audit_logs (id, user_id, action, target_type, target_id, details) VALUES ($1, $2, $3, $4, $5, $6)',
+        [audId, adminId, 'APPROVE_CLAIM', 'claims', claimId, audDetail]
+      ).catch(e => console.warn('[SUPABASE AUDIT LOG ERROR]:', e.message));
+    }
 
     res.json({
       message: 'Claim approved successfully and recovery case generated.',
@@ -198,18 +238,35 @@ router.post('/claims/:id/reject', authenticateToken, requireOfficerOrAdmin, (req
     const claimId = req.params.id;
     const adminId = req.user ? req.user.id : null;
     const { reason } = req.body;
+    const finalReason = reason || 'Ownership evidence and answers did not satisfy verification criteria.';
 
     db.prepare(`
       UPDATE claims 
       SET status = 'REJECTED', admin_notes = ?, updated_at = CURRENT_TIMESTAMP
       WHERE id = ?
-    `).run(reason || 'Ownership evidence and answers did not satisfy verification criteria.', claimId);
+    `).run(finalReason, claimId);
+
+    if (db.pool) {
+      db.pool.query(
+        'UPDATE claims SET status = $1, admin_notes = $2, updated_at = CURRENT_TIMESTAMP WHERE id = $3',
+        ['REJECTED', finalReason, claimId]
+      ).catch(e => console.warn('[SUPABASE CLAIM REJECT ERROR]:', e.message));
+    }
 
     // Audit log
+    const audId = `aud_${Date.now()}`;
+    const audDetail = `Rejected claim #${claimId}. Reason: ${finalReason}`;
     db.prepare(`
       INSERT INTO audit_logs (id, user_id, action, target_type, target_id, details)
       VALUES (?, ?, 'REJECT_CLAIM', 'claims', ?, ?)
-    `).run(`aud_${Date.now()}`, adminId, claimId, `Rejected claim #${claimId}. Reason: ${reason || 'Failed verification'}`);
+    `).run(audId, adminId, claimId, audDetail);
+
+    if (db.pool) {
+      db.pool.query(
+        'INSERT INTO audit_logs (id, user_id, action, target_type, target_id, details) VALUES ($1, $2, $3, $4, $5, $6)',
+        [audId, adminId, 'REJECT_CLAIM', 'claims', claimId, audDetail]
+      ).catch(e => console.warn('[SUPABASE AUDIT LOG ERROR]:', e.message));
+    }
 
     res.json({ message: 'Claim marked as rejected.', claimId });
   } catch (error) {

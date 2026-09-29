@@ -106,7 +106,6 @@ const db = dbInstance || new InMemoryDb();
 async function writeToSupabase(sql, params = []) {
     if (!pool) return;
     try {
-        // Convert ? placeholders to $1, $2, etc.
         let paramIdx = 1;
         const pgSql = sql.replace(/\?/g, () => `$${paramIdx++}`);
         await pool.query(pgSql, params);
@@ -115,10 +114,31 @@ async function writeToSupabase(sql, params = []) {
     }
 }
 
+// Universal runner: executes in SQLite/Memory AND writes through to Supabase
+async function runBoth(sql, params = []) {
+    let sqliteRes = null;
+    try {
+        sqliteRes = db.prepare(sql).run(...params);
+    } catch (e) {
+        console.warn('[LOCAL DB RUN WARNING]:', e.message);
+    }
+    if (pool) {
+        try {
+            let paramIdx = 1;
+            const pgSql = sql.replace(/\?/g, () => `$${paramIdx++}`);
+            await pool.query(pgSql, params);
+        } catch (err) {
+            console.warn('[SUPABASE DUAL-WRITE WARNING]:', err.message);
+        }
+    }
+    return sqliteRes;
+}
+
 // 4. Initial Sync from Supabase to Local
 async function syncFromSupabase() {
     if (!pool) return;
     try {
+        // Users
         const usersRes = await pool.query('SELECT * FROM users');
         if (usersRes.rows && usersRes.rows.length > 0) {
             for (const u of usersRes.rows) {
@@ -132,6 +152,7 @@ async function syncFromSupabase() {
             console.log(`⚡ [SUPABASE SYNC] Loaded ${usersRes.rows.length} users into live memory/cache.`);
         }
 
+        // Items
         const itemsRes = await pool.query('SELECT * FROM items');
         if (itemsRes.rows && itemsRes.rows.length > 0) {
             for (const item of itemsRes.rows) {
@@ -164,6 +185,129 @@ async function syncFromSupabase() {
             }
             console.log(`⚡ [SUPABASE SYNC] Loaded ${itemsRes.rows.length} items into live memory/cache.`);
         }
+
+        // Matches
+        try {
+            const matchesRes = await pool.query('SELECT * FROM matches');
+            if (matchesRes.rows && matchesRes.rows.length > 0) {
+                for (const m of matchesRes.rows) {
+                    db.prepare(`
+                        INSERT OR REPLACE INTO matches (
+                            id, lost_item_id, found_item_id, final_score, visual_score,
+                            text_score, location_score, time_score, category_score,
+                            attribute_score, explanation, status, created_at
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    `).run(
+                        m.id, m.lost_item_id, m.found_item_id, m.final_score, m.visual_score,
+                        m.text_score, m.location_score, m.time_score, m.category_score,
+                        m.attribute_score, typeof m.explanation === 'object' ? JSON.stringify(m.explanation) : m.explanation,
+                        m.status, m.created_at ? m.created_at.toISOString() : new Date().toISOString()
+                    );
+                }
+                console.log(`⚡ [SUPABASE SYNC] Loaded ${matchesRes.rows.length} matches.`);
+            }
+        } catch (e) {}
+
+        // Claims
+        try {
+            const claimsRes = await pool.query('SELECT * FROM claims');
+            if (claimsRes.rows && claimsRes.rows.length > 0) {
+                for (const c of claimsRes.rows) {
+                    db.prepare(`
+                        INSERT OR REPLACE INTO claims (
+                            id, match_id, lost_item_id, found_item_id, claimant_id,
+                            status, verification_score, risk_score, risk_level,
+                            risk_factors, verification_details, admin_notes, created_at, updated_at
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    `).run(
+                        c.id, c.match_id, c.lost_item_id, c.found_item_id, c.claimant_id,
+                        c.status, c.verification_score, c.risk_score, c.risk_level,
+                        c.risk_factors, c.verification_details, c.admin_notes,
+                        c.created_at ? c.created_at.toISOString() : new Date().toISOString(),
+                        c.updated_at ? c.updated_at.toISOString() : new Date().toISOString()
+                    );
+                }
+                console.log(`⚡ [SUPABASE SYNC] Loaded ${claimsRes.rows.length} claims.`);
+            }
+        } catch (e) {}
+
+        // Recovery Cases
+        try {
+            const rcRes = await pool.query('SELECT * FROM recovery_cases');
+            if (rcRes.rows && rcRes.rows.length > 0) {
+                for (const rc of rcRes.rows) {
+                    db.prepare(`
+                        INSERT OR REPLACE INTO recovery_cases (
+                            id, claim_id, item_id, claimant_id, pickup_location,
+                            handover_code, status, timeline, admin_id, created_at, recovered_at
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    `).run(
+                        rc.id, rc.claim_id, rc.item_id, rc.claimant_id, rc.pickup_location,
+                        rc.handover_code, rc.status, typeof rc.timeline === 'object' ? JSON.stringify(rc.timeline) : rc.timeline,
+                        rc.admin_id, rc.created_at ? rc.created_at.toISOString() : new Date().toISOString(),
+                        rc.recovered_at ? rc.recovered_at.toISOString() : null
+                    );
+                }
+                console.log(`⚡ [SUPABASE SYNC] Loaded ${rcRes.rows.length} recovery cases.`);
+            }
+        } catch (e) {}
+
+        // Fraud Alerts
+        try {
+            const faRes = await pool.query('SELECT * FROM fraud_alerts');
+            if (faRes.rows && faRes.rows.length > 0) {
+                for (const fa of faRes.rows) {
+                    db.prepare(`
+                        INSERT OR REPLACE INTO fraud_alerts (
+                            id, claim_id, claimant_id, risk_score, severity, alert_type, reasons, status, created_at
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    `).run(
+                        fa.id, fa.claim_id, fa.claimant_id, fa.risk_score, fa.severity, fa.alert_type,
+                        typeof fa.reasons === 'object' ? JSON.stringify(fa.reasons) : fa.reasons,
+                        fa.status, fa.created_at ? fa.created_at.toISOString() : new Date().toISOString()
+                    );
+                }
+                console.log(`⚡ [SUPABASE SYNC] Loaded ${faRes.rows.length} fraud alerts.`);
+            }
+        } catch (e) {}
+
+        // Notifications
+        try {
+            const notifsRes = await pool.query('SELECT * FROM notifications');
+            if (notifsRes.rows && notifsRes.rows.length > 0) {
+                for (const n of notifsRes.rows) {
+                    db.prepare(`
+                        INSERT OR REPLACE INTO notifications (
+                            id, user_id, type, title, message, data, read, created_at
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    `).run(
+                        n.id, n.user_id, n.type, n.title, n.message,
+                        typeof n.data === 'object' ? JSON.stringify(n.data) : n.data,
+                        n.read || 0, n.created_at ? n.created_at.toISOString() : new Date().toISOString()
+                    );
+                }
+                console.log(`⚡ [SUPABASE SYNC] Loaded ${notifsRes.rows.length} notifications.`);
+            }
+        } catch (e) {}
+
+        // Audit Logs
+        try {
+            const audRes = await pool.query('SELECT * FROM audit_logs');
+            if (audRes.rows && audRes.rows.length > 0) {
+                for (const a of audRes.rows) {
+                    db.prepare(`
+                        INSERT OR REPLACE INTO audit_logs (
+                            id, user_id, action, target_type, target_id, details, created_at
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                    `).run(
+                        a.id, a.user_id, a.action, a.target_type, a.target_id, a.details,
+                        a.created_at ? a.created_at.toISOString() : new Date().toISOString()
+                    );
+                }
+                console.log(`⚡ [SUPABASE SYNC] Loaded ${audRes.rows.length} audit logs.`);
+            }
+        } catch (e) {}
+
     } catch (err) {
         console.warn('⚠️ [SUPABASE SYNC WARNING]:', err.message);
     }
@@ -195,22 +339,22 @@ function initDB() {
             insertUser.run(
                 'usr_tharun_k', 'Tharun Kumar', 'tharunkumark42007@gmail.com',
                 passwordHash, 'admin',
-                'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150&auto=format&fit=crop&q=80'
+                'https://i.pravatar.cc/150?img=12'
             );
             insertUser.run(
                 'usr_siva_k', 'Siva Kumar', 'sivakumar463703@gmail.com',
                 passwordHash, 'verification_officer',
-                'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=150&auto=format&fit=crop&q=80'
+                'https://i.pravatar.cc/150?img=15'
             );
             insertUser.run(
                 'usr_santhosh_k', 'Kumar Santhosh', 'writetokumarsanthosh@gmail.com',
                 passwordHash, 'student',
-                'https://images.unsplash.com/photo-1500648767791-00dcc994a43e?w=150&auto=format&fit=crop&q=80'
+                'https://i.pravatar.cc/150?img=20'
             );
             insertUser.run(
                 'usr_demo_admin', 'System Admin', 'admin@findora.local',
                 passwordHash, 'admin',
-                'https://images.unsplash.com/photo-1472099645785-5658abf4ff4e?w=150&auto=format&fit=crop&q=80'
+                'https://i.pravatar.cc/150?img=68'
             );
         }
     } catch (e) {}
@@ -221,9 +365,10 @@ function initDB() {
 
 initDB();
 
-// Attach Supabase pool & helper
+// Attach Supabase pool & helpers
 db.pool = pool;
 db.writeToSupabase = writeToSupabase;
+db.runBoth = runBoth;
 db.syncFromSupabase = syncFromSupabase;
 
 module.exports = db;

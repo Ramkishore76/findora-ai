@@ -30,6 +30,9 @@ router.get('/', authenticateToken, (req, res) => {
 router.post('/:id/read', authenticateToken, (req, res) => {
   try {
     db.prepare('UPDATE notifications SET read = 1 WHERE id = ?').run(req.params.id);
+    if (db.pool) {
+      db.pool.query('UPDATE notifications SET read = 1 WHERE id = $1', [req.params.id]).catch(() => {});
+    }
     res.json({ success: true });
   } catch (error) {
     res.status(500).json({ error: error.message });
@@ -42,6 +45,9 @@ router.post('/read-all', authenticateToken, (req, res) => {
     const activeUser = db.prepare('SELECT id FROM users LIMIT 1').get();
     const userId = req.user ? req.user.id : (activeUser ? activeUser.id : null);
     db.prepare('UPDATE notifications SET read = 1 WHERE user_id = ?').run(userId);
+    if (db.pool && userId) {
+      db.pool.query('UPDATE notifications SET read = 1 WHERE user_id = $1', [userId]).catch(() => {});
+    }
     res.json({ success: true });
   } catch (error) {
     res.status(500).json({ error: error.message });

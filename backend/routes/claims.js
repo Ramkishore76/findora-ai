@@ -50,6 +50,13 @@ router.post('/initiate', authenticateToken, requireAuth, (req, res) => {
       ) VALUES (?, ?, ?, ?, ?, 'PENDING_VERIFICATION')
     `).run(claimId, matchId || null, lostItemId || null, foundItemId, claimantId);
 
+    if (db.pool) {
+      db.pool.query(
+        'INSERT INTO claims (id, match_id, lost_item_id, found_item_id, claimant_id, status) VALUES ($1, $2, $3, $4, $5, $6) ON CONFLICT (id) DO NOTHING',
+        [claimId, matchId || null, lostItemId || null, foundItemId, claimantId, 'PENDING_VERIFICATION']
+      ).catch(e => console.warn('[SUPABASE CLAIM INSERT ERROR]:', e.message));
+    }
+
     // Insert generated questions
     const insertQ = db.prepare(`
       INSERT INTO claim_questions (id, claim_id, found_item_id, question_key, prompt)
@@ -61,13 +68,29 @@ router.post('/initiate', authenticateToken, requireAuth, (req, res) => {
       const qId = `q_${Date.now()}_${idx}`;
       insertQ.run(qId, claimId, foundItemId, q.question_key, q.prompt);
       createdQuestions.push({ id: qId, question_key: q.question_key, prompt: q.prompt });
+
+      if (db.pool) {
+        db.pool.query(
+          'INSERT INTO claim_questions (id, claim_id, found_item_id, question_key, prompt) VALUES ($1, $2, $3, $4, $5) ON CONFLICT (id) DO NOTHING',
+          [qId, claimId, foundItemId, q.question_key, q.prompt]
+        ).catch(e => console.warn('[SUPABASE QUESTION INSERT ERROR]:', e.message));
+      }
     });
 
     // Audit log
+    const audId = `aud_${Date.now()}`;
+    const audDetail = `Initiated blind-verification claim for item ${foundItemId}`;
     db.prepare(`
       INSERT INTO audit_logs (id, user_id, action, target_type, target_id, details)
       VALUES (?, ?, 'INITIATE_CLAIM', 'claims', ?, ?)
-    `).run(`aud_${Date.now()}`, claimantId, claimId, `Initiated blind-verification claim for item ${foundItemId}`);
+    `).run(audId, claimantId, claimId, audDetail);
+
+    if (db.pool) {
+      db.pool.query(
+        'INSERT INTO audit_logs (id, user_id, action, target_type, target_id, details) VALUES ($1, $2, $3, $4, $5, $6)',
+        [audId, claimantId, 'INITIATE_CLAIM', 'claims', claimId, audDetail]
+      ).catch(e => console.warn('[SUPABASE AUDIT LOG ERROR]:', e.message));
+    }
 
     res.status(201).json({
       claimId,
@@ -151,32 +174,63 @@ router.post('/:id/verify', authenticateToken, requireAuth, (req, res) => {
       claimId
     );
 
+    if (db.pool) {
+      db.pool.query(
+        'UPDATE claims SET status = $1, verification_score = $2, risk_score = $3, risk_level = $4, risk_factors = $5, verification_details = $6, updated_at = CURRENT_TIMESTAMP WHERE id = $7',
+        [
+          newStatus,
+          verificationResult.ownership_confidence,
+          fraudAnalysis.risk_score,
+          fraudAnalysis.risk_level,
+          JSON.stringify(fraudAnalysis.risk_factors),
+          JSON.stringify(verificationResult),
+          claimId
+        ]
+      ).catch(e => console.warn('[SUPABASE CLAIM UPDATE ERROR]:', e.message));
+    }
+
     // If High Risk detected, create an alert in fraud_alerts table
     if (fraudAnalysis.risk_level === 'HIGH' || fraudAnalysis.risk_score >= 65) {
+      const fraudId = `fraud_${Date.now()}`;
+      const reasonsStr = JSON.stringify(fraudAnalysis.risk_factors);
+
       db.prepare(`
         INSERT INTO fraud_alerts (id, claim_id, claimant_id, risk_score, severity, alert_type, reasons, status)
         VALUES (?, ?, ?, ?, ?, 'CLAIM_ANOMALY', ?, 'ACTIVE')
       `).run(
-        `fraud_${Date.now()}`,
+        fraudId,
         claimId,
         claimantId,
         fraudAnalysis.risk_score,
         fraudAnalysis.risk_level,
-        JSON.stringify(fraudAnalysis.risk_factors)
+        reasonsStr
       );
+
+      if (db.pool) {
+        db.pool.query(
+          'INSERT INTO fraud_alerts (id, claim_id, claimant_id, risk_score, severity, alert_type, reasons, status) VALUES ($1, $2, $3, $4, $5, $6, $7, $8) ON CONFLICT (id) DO NOTHING',
+          [fraudId, claimId, claimantId, fraudAnalysis.risk_score, fraudAnalysis.risk_level, 'CLAIM_ANOMALY', reasonsStr, 'ACTIVE']
+        ).catch(e => console.warn('[SUPABASE FRAUD ALERT ERROR]:', e.message));
+      }
 
       // Notify admins
       const adminUsers = db.prepare("SELECT id FROM users WHERE role = 'admin'").all();
       for (const admin of adminUsers) {
+        const notifId = `notif_${Date.now()}_${Math.random().toString(36).substring(7)}`;
+        const notifMsg = `Claim #${claimId} submitted with high risk score (${fraudAnalysis.risk_score}/100). Manual inspection required.`;
+        const notifData = JSON.stringify({ claim_id: claimId });
+
         db.prepare(`
           INSERT INTO notifications (id, user_id, title, message, type, data)
           VALUES (?, ?, 'High Risk Claim Anomaly', ?, 'FRAUD_ALERT', ?)
-        `).run(
-          `notif_${Date.now()}_${Math.random().toString(36).substring(7)}`,
-          admin.id,
-          `Claim #${claimId} submitted with high risk score (${fraudAnalysis.risk_score}/100). Manual inspection required.`,
-          JSON.stringify({ claim_id: claimId })
-        );
+        `).run(notifId, admin.id, notifMsg, notifData);
+
+        if (db.pool) {
+          db.pool.query(
+            'INSERT INTO notifications (id, user_id, title, message, type, data) VALUES ($1, $2, $3, $4, $5, $6)',
+            [notifId, admin.id, 'High Risk Claim Anomaly', notifMsg, 'FRAUD_ALERT', notifData]
+          ).catch(e => console.warn('[SUPABASE ADMIN NOTIF ERROR]:', e.message));
+        }
       }
     }
 
