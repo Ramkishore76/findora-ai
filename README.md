@@ -3,6 +3,8 @@
 
 <div align="center">
 
+[![Team Number](https://img.shields.io/badge/Team%20Number-22-F59E0B?style=for-the-badge&logo=target&logoColor=white)](#)
+[![Problem Statement](https://img.shields.io/badge/Problem%20Statement-Smart%20Lost%20%26%20Found%20Management%20System-8B5CF6?style=for-the-badge)](#)
 [![Live Portal](https://img.shields.io/badge/Production%20Portal-ONLINE-10B981?style=for-the-badge&logo=vercel&logoColor=white)](https://findoravsbec.vercel.app)
 [![Cloud Database](https://img.shields.io/badge/Supabase-PostgreSQL%20Live-3ECF8E?style=for-the-badge&logo=supabase&logoColor=white)](https://supabase.com)
 [![Media Storage](https://img.shields.io/badge/Cloudinary-Verified%20CDN-3448C5?style=for-the-badge&logo=cloudinary&logoColor=white)](https://cloudinary.com)
@@ -15,6 +17,14 @@
 </p>
 
 </div>
+
+---
+
+## 🎯 Challenge Information
+
+- **Problem Statement**: **Smart Lost and Found Management System**
+- **Team Number**: **Team 22**
+- **Institution / Hackathon**: VSBEC Smart Campus Hackathon
 
 ---
 
@@ -95,20 +105,7 @@ cd findora-ai
 npm run install:all
 ```
 
-### 2. Configure `.env`
-Create `.env` in the root directory:
-```env
-PORT=5000
-DATABASE_URL=postgresql://postgres:[PASSWORD]@[HOST]:6543/postgres
-CLOUDINARY_CLOUD_NAME=dalevih1d
-CLOUDINARY_API_KEY=315998851513196
-CLOUDINARY_API_SECRET=your_secret
-GEMINI_API_KEY=your_gemini_key
-TELEGRAM_BOT_TOKEN=your_bot_token
-JWT_SECRET=findora_jwt_secret_key
-```
-
-### 3. Run Locally
+### 2. Run Locally
 ```bash
 npm run dev
 ```
@@ -125,5 +122,5 @@ Open [http://localhost:5173](http://localhost:5173) in your browser.
 ---
 
 <div align="center">
-  <sub>Developed for Smart Campus Hackathon • VSBEC • FINDORA AI Team</sub>
+  <sub>Developed for Smart Campus Hackathon • VSBEC • Team 22 • FINDORA AI</sub>
 </div>
