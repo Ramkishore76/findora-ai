@@ -2,7 +2,21 @@ const Database = require('better-sqlite3');
 const path = require('path');
 const fs = require('fs');
 
-const dbPath = path.resolve(__dirname, 'findora.db');
+let dbPath = path.resolve(__dirname, 'findora.db');
+
+// In Vercel serverless environment, filesystem is read-only except /tmp
+if (process.env.VERCEL) {
+    const tmpDbPath = path.join('/tmp', 'findora.db');
+    if (!fs.existsSync(tmpDbPath) && fs.existsSync(dbPath)) {
+        try {
+            fs.copyFileSync(dbPath, tmpDbPath);
+        } catch (e) {
+            console.warn('[DB] Could not copy initial db to /tmp, will initialize fresh:', e.message);
+        }
+    }
+    dbPath = tmpDbPath;
+}
+
 const db = new Database(dbPath, {
     // verbose: console.log 
 });

@@ -62,13 +62,22 @@ app.use((err, req, res, next) => {
   });
 });
 
-app.listen(PORT, () => {
-  console.log(`=======================================================`);
-  console.log(`🚀 FINDORA AI Backend Service online at http://localhost:${PORT}`);
-  console.log(`🛡️  Blind-Match Ownership Protocol & Risk Engine ready.`);
-  console.log(`🤖 Telegram Bot Service (@${telegramBot.botUsername}) starting...`);
-  console.log(`=======================================================`);
-  telegramBot.init();
-});
+if (!process.env.VERCEL) {
+  app.listen(PORT, () => {
+    console.log(`=======================================================`);
+    console.log(`🚀 FINDORA AI Backend Service online at http://localhost:${PORT}`);
+    console.log(`🛡️  Blind-Match Ownership Protocol & Risk Engine ready.`);
+    console.log(`🤖 Telegram Bot Service (@${telegramBot.botUsername}) starting...`);
+    console.log(`=======================================================`);
+    telegramBot.init();
+  });
+} else {
+  // On Vercel, Telegram Bot can run via webhooks or background calls
+  try {
+    telegramBot.init();
+  } catch (err) {
+    console.warn('[TelegramBot] Serverless init warning:', err.message);
+  }
+}
 
 module.exports = app;
